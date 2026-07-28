@@ -1,0 +1,33 @@
+# Go build artifacts
+build/
+cmd/dxfchk/dxfchk
+*.exe
+*.test
+*.out
+
+# Go coverage
+*.prof
+coverage.txt
+
+# Node/Frontend
+web/node_modules/
+web/dist/
+!web/dist/.gitkeep
+
+# Python (reference source, not built)
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directory (runtime)
+dxfchk-data/
