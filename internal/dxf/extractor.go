@@ -10,10 +10,10 @@ import (
 // DXFContent represents the extracted geometry from a DXF file
 // This is the Go equivalent of the Python get_blocks_lines_polylines_from_dxf()
 type DXFContent struct {
-	Blocks    map[string][][3]float64         // block_name → list of positions
-	Lines     map[string][][2][3]float64       // layer → list of (start, end) sorted pairs
-	Polylines map[string][][3]float64          // layer → flattened normalized vertices (per polyline)
-	Template  string                           // $(TEMPLATE) attribute value
+	Blocks    map[string][][3]float64     // block_name → list of positions
+	Lines     map[string][][2][3]float64 // layer → list of (start, end) sorted pairs
+	Polylines map[string][][][3]float64   // layer → list of polylines (each polyline = list of vertices)
+	Template  string                      // $(TEMPLATE) attribute value
 }
 
 // ExtractContent extracts blocks, lines, and polylines from a Drawing.
@@ -27,7 +27,7 @@ func (d *Drawing) ExtractContent(decimals int) *DXFContent {
 	content := &DXFContent{
 		Blocks:    make(map[string][][3]float64),
 		Lines:     make(map[string][][2][3]float64),
-		Polylines: make(map[string][][3]float64),
+		Polylines: make(map[string][][][3]float64),
 	}
 	content.Template = d.GetTemplateAttribute()
 
@@ -58,9 +58,10 @@ func (d *Drawing) ExtractContent(decimals int) *DXFContent {
 			ez := round(e.GetFloatValue(31))
 			start := [3]float64{sx, sy, sz}
 			end := [3]float64{ex, ey, ez}
-			// Sort endpoints so (A->B) equals (B->A)
+			// Sort endpoints so (A->B) equals (B->A) — matches Python sorted([start, end])
 			sorted := [2][3]float64{start, end}
-			if start[0] > end[0] || (start[0] == end[0] && start[1] > end[1]) {
+			if start[0] > end[0] || (start[0] == end[0] && start[1] > end[1]) ||
+				(start[0] == end[0] && start[1] == end[1] && start[2] > end[2]) {
 				sorted = [2][3]float64{end, start}
 			}
 			content.Lines[layer] = append(content.Lines[layer], sorted)
@@ -86,15 +87,12 @@ func (d *Drawing) ExtractContent(decimals int) *DXFContent {
 				}
 			}
 			normalized := normalizeVertices(vertices)
-			// Flatten into single slice for storage
-			for _, v := range normalized {
-				content.Polylines[layer] = append(content.Polylines[layer], v)
-			}
+			// Store as one polyline entry (like Python appends the tuple)
+			content.Polylines[layer] = append(content.Polylines[layer], normalized)
 
 		case "POLYLINE":
 			layer := e.GetStringValue(8)
 			// POLYLINE vertices come from following VERTEX entities
-			// Already collected in the entity's pairs if adjacent
 			var vertices [][3]float64
 			for _, p := range e.Pairs {
 				if p.Code == 10 {
@@ -103,12 +101,8 @@ func (d *Drawing) ExtractContent(decimals int) *DXFContent {
 					vertices = append(vertices, [3]float64{x, 0, 0})
 				}
 			}
-			// For POLYLINE, vertices might be in separate VERTEX entities
-			// This is a simplification - proper POLYLINE parsing needs VERTEX collection
 			normalized := normalizeVertices(vertices)
-			for _, v := range normalized {
-				content.Polylines[layer] = append(content.Polylines[layer], v)
-			}
+			content.Polylines[layer] = append(content.Polylines[layer], normalized)
 		}
 	}
 

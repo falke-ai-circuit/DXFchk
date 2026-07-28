@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/dxf"
 )
@@ -24,33 +25,51 @@ type Result struct {
 	ModFolder   string `json:"mod_folder,omitempty"`
 }
 
-// ComparisonProcessor handles the full comparison workflow
-type ComparisonProcessor struct {
-	TemplateMap     TemplateMap
-	OutputFolder     string
-	MoveFiles        bool
-	GroupByContent  bool
-	LogCallback     func(string)
+// fileInfo holds file path and name for hash grouping (mirrors Python dict)
+type fileInfo struct {
+	FilePath string
+	FileName string
+}
 
-	// Internal state
-	templateFileHashes map[string]map[string][]string // template → hash → file paths
-	modFolders         []string
-	directCopies       map[string][]string  // template → file paths (identical)
-	detailedLogs       map[string][]string  // template → log lines
+// ComparisonProcessor handles the full comparison workflow
+// Port of Python ComparisonProcessor class
+type ComparisonProcessor struct {
+	TemplateMap    TemplateMap
+	OutputFolder   string
+	MoveFiles      bool
+	GroupByContent bool
+	LogCallback    func(string)
+
+	// Internal state (mirrors Python)
+	templateFileHashes  map[string]map[string][]fileInfo // template → hash → files
+	modFolders          map[string]bool                   // set of mod folder paths
+	templateDirectCopies map[string][]string             // sanitized_name → filenames
+	templateDetailedLogs map[string][]detailedLogEntry   // template_name → log entries
+}
+
+// detailedLogEntry mirrors Python's (filename, log_content, destination_flag) tuple
+type detailedLogEntry struct {
+	Filename     string
+	LogContent   string
+	Destination  string // "template", hash string, or "" (None)
 }
 
 // NewComparisonProcessor creates a new processor
 func NewComparisonProcessor(templateMap TemplateMap, outputFolder string, moveFiles bool, groupByContent bool, logFn func(string)) *ComparisonProcessor {
+	// Python creates notemplate folder in __init__
+	notemplateDir := filepath.Join(outputFolder, "notemplate")
+	os.MkdirAll(notemplateDir, 0755)
+
 	return &ComparisonProcessor{
-		TemplateMap:        templateMap,
-		OutputFolder:       outputFolder,
-		MoveFiles:          moveFiles,
-		GroupByContent:     groupByContent,
-		LogCallback:        logFn,
-		templateFileHashes: make(map[string]map[string][]string),
-		modFolders:         []string{},
-		directCopies:       make(map[string][]string),
-		detailedLogs:       make(map[string][]string),
+		TemplateMap:          templateMap,
+		OutputFolder:         outputFolder,
+		MoveFiles:            moveFiles,
+		GroupByContent:       groupByContent,
+		LogCallback:          logFn,
+		templateFileHashes:   make(map[string]map[string][]fileInfo),
+		modFolders:           make(map[string]bool),
+		templateDirectCopies: make(map[string][]string),
+		templateDetailedLogs: make(map[string][]detailedLogEntry),
 	}
 }
 
@@ -60,7 +79,8 @@ func (c *ComparisonProcessor) log(msg string) {
 	}
 }
 
-// ProcessFile processes a single DXF file, comparing it to templates
+// ProcessFile processes a single DXF file, comparing it to templates.
+// Port of Python process_file()
 func (c *ComparisonProcessor) ProcessFile(dxfFile string) Result {
 	fileName := filepath.Base(dxfFile)
 	c.log(fmt.Sprintf("Processing: %s", fileName))
@@ -75,8 +95,34 @@ func (c *ComparisonProcessor) ProcessFile(dxfFile string) Result {
 	// Extract $(TEMPLATE) attribute
 	templateName := drawing.GetTemplateAttribute()
 
+	// Python fallback: if no $(TEMPLATE) attr, try matching by filename prefix
 	if templateName == "" {
-		c.log(fmt.Sprintf("  -> No template found for %s", fileName))
+		for name := range c.TemplateMap {
+			if name == "" || strings.TrimSpace(name) == "" {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(fileName), strings.ToLower(name)) {
+				// Pick longest matching name (like Python)
+				templateName = name
+				break
+			}
+		}
+		// Find longest match
+		bestMatch := ""
+		for name := range c.TemplateMap {
+			if name == "" || strings.TrimSpace(name) == "" {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(fileName), strings.ToLower(name)) {
+				if len(name) > len(bestMatch) {
+					bestMatch = name
+				}
+			}
+		}
+		templateName = bestMatch
+	}
+
+	if templateName == "" || templateName == "notemplate" {
 		c.handleNoTemplate(dxfFile)
 		return Result{FileName: fileName, Template: "notemplate", Status: "no_template"}
 	}
@@ -84,123 +130,359 @@ func (c *ComparisonProcessor) ProcessFile(dxfFile string) Result {
 	// Find matching template file
 	templatePath, found := c.TemplateMap[templateName]
 	if !found {
-		c.log(fmt.Sprintf("  -> Template '%s' not found in template map", templateName))
 		c.handleNoTemplate(dxfFile)
 		return Result{FileName: fileName, Template: "notemplate", Status: "no_template"}
 	}
 
-	// Compare module vs template
+	// Compare using compare_dict_of_lists approach (like Python)
 	identical := c.filesAreIdentical(dxfFile, templatePath)
 	if identical {
-		c.log(fmt.Sprintf("  -> MATCH: %s is identical to template %s", fileName, templateName))
 		c.handleMatchingFile(dxfFile, templateName)
 		return Result{FileName: fileName, Template: templateName, Status: "match"}
 	}
 
-	c.log(fmt.Sprintf("  -> DIFFERENT: %s has differences from template %s", fileName, templateName))
 	c.handleDifferentFile(dxfFile, templatePath, templateName)
 	return Result{FileName: fileName, Template: templateName, Status: "different"}
 }
 
 // filesAreIdentical checks if two DXF files have identical geometry
+// Port of Python _files_are_identical using compare_dict_of_lists
 func (c *ComparisonProcessor) filesAreIdentical(file1, file2 string) bool {
 	content1, err := extractContent(file1)
 	if err != nil {
+		c.log(fmt.Sprintf("Error comparing files: %v", err))
 		return false
 	}
 	content2, err := extractContent(file2)
 	if err != nil {
+		c.log(fmt.Sprintf("Error comparing files: %v", err))
 		return false
 	}
-	hash1 := ContentHash(content1)
-	hash2 := ContentHash(content2)
-	return hash1 == hash2
+
+	// Compare blocks
+	_, onlyIn1B, onlyIn2B, diffB := compareDictOfLists(content1.Blocks, content2.Blocks)
+	// Compare lines
+	_, onlyIn1L, onlyIn2L, diffL := compareDictOfListsLines(content1.Lines, content2.Lines)
+	// Compare polylines
+	_, onlyIn1P, onlyIn2P, diffP := compareDictOfListsPolylines(content1.Polylines, content2.Polylines)
+
+	return len(onlyIn1B) == 0 && len(onlyIn2B) == 0 && len(diffB) == 0 &&
+		len(onlyIn1L) == 0 && len(onlyIn2L) == 0 && len(diffL) == 0 &&
+		len(onlyIn1P) == 0 && len(onlyIn2P) == 0 && len(diffP) == 0
 }
 
 // handleNoTemplate copies file to output/notemplate/
 func (c *ComparisonProcessor) handleNoTemplate(dxfFile string) {
+	fileName := filepath.Base(dxfFile)
+	c.log(fmt.Sprintf("  -> No template found for %s", fileName))
+
 	notemplateDir := filepath.Join(c.OutputFolder, "notemplate")
 	os.MkdirAll(notemplateDir, 0755)
-	dst := filepath.Join(notemplateDir, filepath.Base(dxfFile))
+	dst := filepath.Join(notemplateDir, fileName)
 	copyFile(dxfFile, dst, c.log)
 }
 
 // handleMatchingFile copies file to output/template_name/
 func (c *ComparisonProcessor) handleMatchingFile(dxfFile, templateName string) {
+	fileName := filepath.Base(dxfFile)
+	c.log(fmt.Sprintf("  -> Using template: %s", templateName))
+	c.log(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
+
 	safeName := sanitizeFilename(templateName)
 	dir := filepath.Join(c.OutputFolder, safeName)
 	os.MkdirAll(dir, 0755)
-	dst := filepath.Join(dir, filepath.Base(dxfFile))
+	dst := filepath.Join(dir, fileName)
 	copyFile(dxfFile, dst, c.log)
-	c.directCopies[templateName] = append(c.directCopies[templateName], filepath.Base(dxfFile))
+
+	c.templateDirectCopies[safeName] = append(c.templateDirectCopies[safeName], fileName)
 }
 
 // handleDifferentFile compares and groups the file
+// Port of Python _compare_with_template
 func (c *ComparisonProcessor) handleDifferentFile(dxfFile, templatePath, templateName string) {
+	fileName := filepath.Base(dxfFile)
 	safeName := sanitizeFilename(templateName)
-	dir := filepath.Join(c.OutputFolder, safeName)
-	os.MkdirAll(dir, 0755)
 
-	// Copy to template folder first
-	dst := filepath.Join(dir, filepath.Base(dxfFile))
-	copyFile(dxfFile, dst, c.log)
+	content1, err1 := extractContent(dxfFile)
+	content2, err2 := extractContent(templatePath)
 
-	// Group by content hash
-	if c.GroupByContent {
-		content, err := extractContent(dxfFile)
-		if err == nil {
-			hash := ContentHash(content)
-			if c.templateFileHashes[templateName] == nil {
-				c.templateFileHashes[templateName] = make(map[string][]string)
-			}
-			c.templateFileHashes[templateName][hash] = append(c.templateFileHashes[templateName][hash], dst)
-			c.log(fmt.Sprintf("  -> Grouped with content hash: %s", hash[:8]))
-		}
+	var detailedLog []string
+	detailedLog = append(detailedLog, "========== DETAILED COMPARISON LOG ==========")
+	detailedLog = append(detailedLog, fmt.Sprintf("File: %s", fileName))
+	detailedLog = append(detailedLog, fmt.Sprintf("Template: %s (%s)", templateName, filepath.Base(templatePath)))
+	detailedLog = append(detailedLog, fmt.Sprintf("Comparison Time: %s", time.Now().Format("2006-01-02 15:04:05")))
+	detailedLog = append(detailedLog, "==========================================\n")
+
+	if err1 != nil || err2 != nil {
+		errMsg := fmt.Sprintf("  -> Error reading DXF data from %s or template", fileName)
+		c.log(errMsg)
+		detailedLog = append(detailedLog, errMsg)
+		detailedLog = append(detailedLog, "Processing failed - could not read DXF data")
+		c.templateDetailedLogs[templateName] = append(c.templateDetailedLogs[templateName], detailedLogEntry{
+			Filename:   fileName,
+			LogContent: strings.Join(detailedLog, "\n"),
+			Destination: "",
+		})
+		return
 	}
 
-	// Generate detailed comparison log
-	c.generateDetailedLog(dxfFile, templatePath, templateName)
+	// Entity counts
+	blocksCount1 := 0
+	for _, v := range content1.Blocks {
+		blocksCount1 += len(v)
+	}
+	blocksCount2 := 0
+	for _, v := range content2.Blocks {
+		blocksCount2 += len(v)
+	}
+	linesCount1 := 0
+	for _, v := range content1.Lines {
+		linesCount1 += len(v)
+	}
+	linesCount2 := 0
+	for _, v := range content2.Lines {
+		linesCount2 += len(v)
+	}
+	polyCount1 := 0
+	for _, v := range content1.Polylines {
+		polyCount1 += len(v)
+	}
+	polyCount2 := 0
+	for _, v := range content2.Polylines {
+		polyCount2 += len(v)
+	}
+
+	detailedLog = append(detailedLog, "1. ENTITY COUNTS")
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Blocks: %d in %d block types", blocksCount1, len(content1.Blocks)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Blocks: %d in %d block types", blocksCount2, len(content2.Blocks)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Lines: %d in %d layers", linesCount1, len(content1.Lines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Lines: %d in %d layers", linesCount2, len(content2.Lines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Polylines: %d in %d layers", polyCount1, len(content1.Polylines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Polylines: %d in %d layers", polyCount2, len(content2.Polylines)))
+	detailedLog = append(detailedLog, "")
+
+	// Compare blocks
+	commonB, onlyIn1B, onlyIn2B, diffB := compareDictOfLists(content1.Blocks, content2.Blocks)
+	commonL, onlyIn1L, onlyIn2L, diffL := compareDictOfListsLines(content1.Lines, content2.Lines)
+	commonP, onlyIn1P, onlyIn2P, diffP := compareDictOfListsPolylines(content1.Polylines, content2.Polylines)
+
+	_ = commonB
+	_ = commonL
+	_ = commonP
+
+	// Block differences
+	detailedLog = append(detailedLog, "2. BLOCK DIFFERENCES")
+	if len(onlyIn1B) > 0 {
+		detailedLog = append(detailedLog, "  Block types only in file:")
+		sort.Strings(onlyIn1B)
+		for _, name := range onlyIn1B {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d instances)", name, len(content1.Blocks[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No block types unique to file")
+	}
+	if len(onlyIn2B) > 0 {
+		detailedLog = append(detailedLog, "  Block types only in template:")
+		sort.Strings(onlyIn2B)
+		for _, name := range onlyIn2B {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d instances)", name, len(content2.Blocks[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No block types unique to template")
+	}
+	if len(diffB) > 0 {
+		detailedLog = append(detailedLog, "  Blocks with differences in common block types:")
+		diffBKeys := make([]string, 0, len(diffB))
+		for k := range diffB {
+			diffBKeys = append(diffBKeys, k)
+		}
+		sort.Strings(diffBKeys)
+		for _, name := range diffBKeys {
+			d := diffB[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d instances only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d instances only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common instances", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common block types")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Line differences
+	detailedLog = append(detailedLog, "3. LINE DIFFERENCES")
+	if len(onlyIn1L) > 0 {
+		detailedLog = append(detailedLog, "  Line layers only in file:")
+		sort.Strings(onlyIn1L)
+		for _, name := range onlyIn1L {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d lines)", name, len(content1.Lines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No line layers unique to file")
+	}
+	if len(onlyIn2L) > 0 {
+		detailedLog = append(detailedLog, "  Line layers only in template:")
+		sort.Strings(onlyIn2L)
+		for _, name := range onlyIn2L {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d lines)", name, len(content2.Lines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No line layers unique to template")
+	}
+	if len(diffL) > 0 {
+		detailedLog = append(detailedLog, "  Lines with differences in common layers:")
+		diffLKeys := make([]string, 0, len(diffL))
+		for k := range diffL {
+			diffLKeys = append(diffLKeys, k)
+		}
+		sort.Strings(diffLKeys)
+		for _, name := range diffLKeys {
+			d := diffL[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d lines only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d lines only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common lines", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common line layers")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Polyline differences
+	detailedLog = append(detailedLog, "4. POLYLINE DIFFERENCES")
+	if len(onlyIn1P) > 0 {
+		detailedLog = append(detailedLog, "  Polyline layers only in file:")
+		sort.Strings(onlyIn1P)
+		for _, name := range onlyIn1P {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d polylines)", name, len(content1.Polylines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No polyline layers unique to file")
+	}
+	if len(onlyIn2P) > 0 {
+		detailedLog = append(detailedLog, "  Polyline layers only in template:")
+		sort.Strings(onlyIn2P)
+		for _, name := range onlyIn2P {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d polylines)", name, len(content2.Polylines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No polyline layers unique to template")
+	}
+	if len(diffP) > 0 {
+		detailedLog = append(detailedLog, "  Polylines with differences in common layers:")
+		diffPKeys := make([]string, 0, len(diffP))
+		for k := range diffP {
+			diffPKeys = append(diffPKeys, k)
+		}
+		sort.Strings(diffPKeys)
+		for _, name := range diffPKeys {
+			d := diffP[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d polylines only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d polylines only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common polylines", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common polyline layers")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Has differences check
+	hasDiffs := len(onlyIn1B) > 0 || len(onlyIn2B) > 0 || len(diffB) > 0 ||
+		len(onlyIn1L) > 0 || len(onlyIn2L) > 0 || len(diffL) > 0 ||
+		len(onlyIn1P) > 0 || len(onlyIn2P) > 0 || len(diffP) > 0
+
+	detailedLog = append(detailedLog, "5. COMPARISON SUMMARY")
+	if hasDiffs {
+		detailedLog = append(detailedLog, fmt.Sprintf("  RESULT: DIFFERENT - '%s' has differences from template", fileName))
+		detailedLog = append(detailedLog, "  File will be copied to template folder and organized into mod folders")
+	} else {
+		detailedLog = append(detailedLog, fmt.Sprintf("  RESULT: MATCH - '%s' is identical to template", fileName))
+		detailedLog = append(detailedLog, "  File will be copied to the template folder")
+	}
+
+	// Copy to template folder first
+	templateDir := filepath.Join(c.OutputFolder, safeName)
+	os.MkdirAll(templateDir, 0755)
+	tempTargetPath := filepath.Join(templateDir, fileName)
+	c.log(fmt.Sprintf("  -> DIFFERENT: %s has differences from template", fileName))
+	copyFile(dxfFile, tempTargetPath, c.log)
+
+	var contentHash string
+	if c.GroupByContent {
+		contentHash = ContentHash(content1)
+		if c.templateFileHashes[templateName] == nil {
+			c.templateFileHashes[templateName] = make(map[string][]fileInfo)
+		}
+		c.templateFileHashes[templateName][contentHash] = append(c.templateFileHashes[templateName][contentHash], fileInfo{
+			FilePath: tempTargetPath,
+			FileName: fileName,
+		})
+		c.log(fmt.Sprintf("  -> Grouped with content hash: %s", contentHash[:8]))
+	} else {
+		c.templateFileHashes[templateName]["default"] = append(c.templateFileHashes[templateName]["default"], fileInfo{
+			FilePath: tempTargetPath,
+			FileName: fileName,
+		})
+	}
+
+	// Store detailed log
+	dest := contentHash
+	if !hasDiffs {
+		dest = "template"
+	}
+	c.templateDetailedLogs[templateName] = append(c.templateDetailedLogs[templateName], detailedLogEntry{
+		Filename:   fileName,
+		LogContent: strings.Join(detailedLog, "\n"),
+		Destination: dest,
+	})
 }
 
-// Finalize creates _modN folders and moves files
+// Finalize creates mod folders and moves files (like Python finalize())
 func (c *ComparisonProcessor) Finalize() {
 	c.log("Finalizing comparison and organizing mod folders...")
 
-	for templateName, hashGroups := range c.templateFileHashes {
+	// Save detailed logs first (like Python)
+	c.saveDetailedLogs()
+
+	// Organize mod folders
+	for templateName, hashFiles := range c.templateFileHashes {
 		safeName := sanitizeFilename(templateName)
-		templateDir := filepath.Join(c.OutputFolder, safeName)
+		c.log(fmt.Sprintf("Processing template: %s with %d different content groups", templateName, len(hashFiles)))
 
 		// Sort hashes for deterministic ordering
-		hashes := make([]string, 0, len(hashGroups))
-		for h := range hashGroups {
-			if len(hashGroups[h]) > 0 {
+		hashes := make([]string, 0, len(hashFiles))
+		for h := range hashFiles {
+			if len(hashFiles[h]) > 0 {
 				hashes = append(hashes, h)
 			}
 		}
 		sort.Strings(hashes)
 
-		c.log(fmt.Sprintf("Processing template: %s with %d different content groups", templateName, len(hashes)))
-
 		for i, hash := range hashes {
-			files := hashGroups[hash]
-			modName := fmt.Sprintf("_mod%d", i+1)
-			modDir := filepath.Join(templateDir, modName)
+			files := hashFiles[hash]
+			// Python: mod_folder_name = f"{sanitized_template_name}_mod{mod_idx}"
+			modFolderName := fmt.Sprintf("%s_mod%d", safeName, i+1)
+			modDir := filepath.Join(c.OutputFolder, modFolderName)
 			os.MkdirAll(modDir, 0755)
 
-			c.log(fmt.Sprintf("  -> Using mod folder: %s (%d files)", modName, len(files)))
+			c.log(fmt.Sprintf("  -> Using mod folder: %s with %d files", modFolderName, len(files)))
 
-			for _, file := range files {
-				fileName := filepath.Base(file)
-				dst := filepath.Join(modDir, fileName)
-				if c.MoveFiles {
-					moveFile(file, dst, c.log)
-				} else {
-					copyFile(file, dst, c.log)
+			for _, fi := range files {
+				if _, err := os.Stat(fi.FilePath); os.IsNotExist(err) {
+					continue
 				}
+				targetPath := filepath.Join(modDir, fi.FileName)
+				// Python uses move_file (copy + delete original)
+				moveFile(fi.FilePath, targetPath, c.log)
+				c.log(fmt.Sprintf("    -> Moved %s from template folder to %s", fi.FileName, modFolderName))
 			}
-			c.modFolders = append(c.modFolders, modName)
+			c.modFolders[modDir] = true
 		}
 	}
+
+	// Ensure all folders have logs (like Python _ensure_all_folders_have_logs)
+	c.ensureAllFoldersHaveLogs()
 
 	c.log(fmt.Sprintf("Created %d mod folders in total", len(c.modFolders)))
 }
@@ -212,7 +494,11 @@ func (c *ComparisonProcessor) GetModFolderCount() int {
 
 // RunComparison runs the full comparison workflow
 func RunComparison(templateMap TemplateMap, searchFolder, outputFolder string, recursive, moveFiles, groupByContent bool, progressFn func(int, int) bool, logFn func(string)) []Result {
-	processor := NewComparisonProcessor(templateMap, outputFolder, moveFiles, groupByContent, logFn)
+	processor := NewComparisonProcessor(templateMap, outputFolder, false, groupByContent, logFn)
+
+	logFn("Note: Original files in search folder will be preserved")
+	logFn("Note: Files with differences will be moved from template folders to mod folders to avoid duplicates")
+	logFn("Note: Detailed comparison logs will be saved for each template")
 
 	// Find all DXF files
 	var dxfFiles []string
@@ -249,8 +535,432 @@ func RunComparison(templateMap TemplateMap, searchFolder, outputFolder string, r
 		progressFn(len(dxfFiles), len(dxfFiles))
 	}
 
-	logFn(fmt.Sprintf("Processing complete. Processed %d files.", len(dxfFiles)))
+	matched := 0
+	different := 0
+	noTemplate := 0
+	for _, r := range results {
+		switch r.Status {
+		case "match":
+			matched++
+		case "different":
+			different++
+		case "no_template":
+			noTemplate++
+		}
+	}
+	logFn(fmt.Sprintf("Processing complete. Processed %d of %d files.", matched+different+noTemplate, len(dxfFiles)))
+	logFn(fmt.Sprintf("=== SUMMARY: %d matched, %d different, %d no template ===", matched, different, noTemplate))
+
 	return results
+}
+
+// --- Comparison helpers (port of Python compare_dict_of_lists) ---
+
+// DiffResult holds the comparison result for one key
+type DiffResult struct {
+	Common  []string
+	OnlyIn1 []string
+	OnlyIn2 []string
+}
+
+// compareDictOfLists compares blocks: map[string][][3]float64
+func compareDictOfLists(dict1, dict2 map[string][][3]float64) ([]string, []string, []string, map[string]DiffResult) {
+	keys1 := make(map[string]bool)
+	keys2 := make(map[string]bool)
+	for k := range dict1 {
+		keys1[k] = true
+	}
+	for k := range dict2 {
+		keys2[k] = true
+	}
+
+	commonKeys := []string{}
+	onlyIn1 := []string{}
+	onlyIn2 := []string{}
+
+	for k := range keys1 {
+		if keys2[k] {
+			commonKeys = append(commonKeys, k)
+		} else {
+			onlyIn1 = append(onlyIn1, k)
+		}
+	}
+	for k := range keys2 {
+		if !keys1[k] {
+			onlyIn2 = append(onlyIn2, k)
+		}
+	}
+	sort.Strings(commonKeys)
+	sort.Strings(onlyIn1)
+	sort.Strings(onlyIn2)
+
+	diff := make(map[string]DiffResult)
+	for _, k := range commonKeys {
+		set1 := make(map[[3]float64]bool)
+		set2 := make(map[[3]float64]bool)
+		for _, v := range dict1[k] {
+			set1[v] = true
+		}
+		for _, v := range dict2[k] {
+			set2[v] = true
+		}
+
+		common := []string{}
+		onlyIn1ForK := []string{}
+		onlyIn2ForK := []string{}
+
+		for v := range set1 {
+			if set2[v] {
+				common = append(common, fmt.Sprintf("%v", v))
+			} else {
+				onlyIn1ForK = append(onlyIn1ForK, fmt.Sprintf("%v", v))
+			}
+		}
+		for v := range set2 {
+			if !set1[v] {
+				onlyIn2ForK = append(onlyIn2ForK, fmt.Sprintf("%v", v))
+			}
+		}
+
+		sort.Strings(common)
+		sort.Strings(onlyIn1ForK)
+		sort.Strings(onlyIn2ForK)
+
+		if len(onlyIn1ForK) > 0 || len(onlyIn2ForK) > 0 {
+			diff[k] = DiffResult{Common: common, OnlyIn1: onlyIn1ForK, OnlyIn2: onlyIn2ForK}
+		}
+	}
+
+	return commonKeys, onlyIn1, onlyIn2, diff
+}
+
+// compareDictOfListsLines compares lines: map[string][][2][3]float64
+func compareDictOfListsLines(dict1, dict2 map[string][][2][3]float64) ([]string, []string, []string, map[string]DiffResult) {
+	keys1 := make(map[string]bool)
+	keys2 := make(map[string]bool)
+	for k := range dict1 {
+		keys1[k] = true
+	}
+	for k := range dict2 {
+		keys2[k] = true
+	}
+
+	commonKeys := []string{}
+	onlyIn1 := []string{}
+	onlyIn2 := []string{}
+
+	for k := range keys1 {
+		if keys2[k] {
+			commonKeys = append(commonKeys, k)
+		} else {
+			onlyIn1 = append(onlyIn1, k)
+		}
+	}
+	for k := range keys2 {
+		if !keys1[k] {
+			onlyIn2 = append(onlyIn2, k)
+		}
+	}
+	sort.Strings(commonKeys)
+	sort.Strings(onlyIn1)
+	sort.Strings(onlyIn2)
+
+	diff := make(map[string]DiffResult)
+	for _, k := range commonKeys {
+		set1 := make(map[[2][3]float64]bool)
+		set2 := make(map[[2][3]float64]bool)
+		for _, v := range dict1[k] {
+			set1[v] = true
+		}
+		for _, v := range dict2[k] {
+			set2[v] = true
+		}
+
+		common := []string{}
+		onlyIn1ForK := []string{}
+		onlyIn2ForK := []string{}
+
+		for v := range set1 {
+			if set2[v] {
+				common = append(common, fmt.Sprintf("%v", v))
+			} else {
+				onlyIn1ForK = append(onlyIn1ForK, fmt.Sprintf("%v", v))
+			}
+		}
+		for v := range set2 {
+			if !set1[v] {
+				onlyIn2ForK = append(onlyIn2ForK, fmt.Sprintf("%v", v))
+			}
+		}
+
+		sort.Strings(common)
+		sort.Strings(onlyIn1ForK)
+		sort.Strings(onlyIn2ForK)
+
+		if len(onlyIn1ForK) > 0 || len(onlyIn2ForK) > 0 {
+			diff[k] = DiffResult{Common: common, OnlyIn1: onlyIn1ForK, OnlyIn2: onlyIn2ForK}
+		}
+	}
+
+	return commonKeys, onlyIn1, onlyIn2, diff
+}
+
+// compareDictOfListsPolylines compares polylines: map[string][][][3]float64
+// Each entry is a polyline (list of vertices). We compare as sets of vertex-slices.
+func compareDictOfListsPolylines(dict1, dict2 map[string][][][3]float64) ([]string, []string, []string, map[string]DiffResult) {
+	keys1 := make(map[string]bool)
+	keys2 := make(map[string]bool)
+	for k := range dict1 {
+		keys1[k] = true
+	}
+	for k := range dict2 {
+		keys2[k] = true
+	}
+
+	commonKeys := []string{}
+	onlyIn1 := []string{}
+	onlyIn2 := []string{}
+
+	for k := range keys1 {
+		if keys2[k] {
+			commonKeys = append(commonKeys, k)
+		} else {
+			onlyIn1 = append(onlyIn1, k)
+		}
+	}
+	for k := range keys2 {
+		if !keys1[k] {
+			onlyIn2 = append(onlyIn2, k)
+		}
+	}
+	sort.Strings(commonKeys)
+	sort.Strings(onlyIn1)
+	sort.Strings(onlyIn2)
+
+	diff := make(map[string]DiffResult)
+	for _, k := range commonKeys {
+		// Compare as sets of polylines (each polyline is a [][3]float64)
+		set1 := make(map[string]bool)
+		set2 := make(map[string]bool)
+		for _, v := range dict1[k] {
+			set1[fmt.Sprintf("%v", v)] = true
+		}
+		for _, v := range dict2[k] {
+			set2[fmt.Sprintf("%v", v)] = true
+		}
+
+		common := []string{}
+		onlyIn1ForK := []string{}
+		onlyIn2ForK := []string{}
+
+		for v := range set1 {
+			if set2[v] {
+				common = append(common, v)
+			} else {
+				onlyIn1ForK = append(onlyIn1ForK, v)
+			}
+		}
+		for v := range set2 {
+			if !set1[v] {
+				onlyIn2ForK = append(onlyIn2ForK, v)
+			}
+		}
+
+		sort.Strings(common)
+		sort.Strings(onlyIn1ForK)
+		sort.Strings(onlyIn2ForK)
+
+		if len(onlyIn1ForK) > 0 || len(onlyIn2ForK) > 0 {
+			diff[k] = DiffResult{Common: common, OnlyIn1: onlyIn1ForK, OnlyIn2: onlyIn2ForK}
+		}
+	}
+
+	return commonKeys, onlyIn1, onlyIn2, diff
+}
+
+// --- Detailed log methods ---
+
+func (c *ComparisonProcessor) saveDetailedLogs() {
+	// Build file destinations map
+	fileDestinations := make(map[string]string)
+
+	for templateName, hashFiles := range c.templateFileHashes {
+		safeName := sanitizeFilename(templateName)
+		sortedHashItems := make([]string, 0, len(hashFiles))
+		for h := range hashFiles {
+			sortedHashItems = append(sortedHashItems, h)
+		}
+		sort.Strings(sortedHashItems)
+
+		for modIdx, hashVal := range sortedHashItems {
+			files := hashFiles[hashVal]
+			if len(files) == 0 {
+				continue
+			}
+			modFolderName := fmt.Sprintf("%s_mod%d", safeName, modIdx+1)
+			for _, fi := range files {
+				fileDestinations[fi.FileName] = modFolderName
+			}
+		}
+	}
+
+	// Notemplate log
+	notemplatePath := filepath.Join(c.OutputFolder, "notemplate")
+	if _, err := os.Stat(notemplatePath); err == nil {
+		logPath := filepath.Join(notemplatePath, "notemplate_dxfanalyze.log")
+		var logContent strings.Builder
+		logContent.WriteString("DETAILED COMPARISON LOG FOR: notemplate\n")
+		logContent.WriteString(fmt.Sprintf("Created: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+		logContent.WriteString("Files in this folder have no matching template.\n")
+		logContent.WriteString("=============================================\n\n")
+
+		entries, _ := os.ReadDir(notemplatePath)
+		var dxfFiles []string
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".dxf") {
+				dxfFiles = append(dxfFiles, e.Name())
+			}
+		}
+		logContent.WriteString(fmt.Sprintf("Number of files without templates: %d\n\n", len(dxfFiles)))
+		if len(dxfFiles) > 0 {
+			logContent.WriteString("Files without templates:\n")
+			sort.Strings(dxfFiles)
+			for _, f := range dxfFiles {
+				logContent.WriteString(fmt.Sprintf("- %s\n", f))
+			}
+		}
+		os.WriteFile(logPath, []byte(logContent.String()), 0644)
+		c.log(fmt.Sprintf("Saved detailed comparison log to: %s", logPath))
+	}
+
+	// Per-template logs
+	for templateName, logs := range c.templateDetailedLogs {
+		if len(logs) == 0 {
+			continue
+		}
+		safeName := sanitizeFilename(templateName)
+
+		// Group logs by folder
+		folderLogs := make(map[string][]string)
+		for _, entry := range logs {
+			if entry.Destination == "template" {
+				folderLogs[safeName] = append(folderLogs[safeName], entry.LogContent)
+			} else if entry.Destination == "" {
+				continue
+			}
+			if dest, ok := fileDestinations[entry.Filename]; ok {
+				folderLogs[dest] = append(folderLogs[dest], entry.LogContent)
+			}
+		}
+
+		// Template folder log
+		templateFolderPath := filepath.Join(c.OutputFolder, safeName)
+		if _, err := os.Stat(templateFolderPath); err == nil {
+			logPath := filepath.Join(templateFolderPath, fmt.Sprintf("%s_dxfanalyze.log", safeName))
+			var logContent strings.Builder
+			logContent.WriteString(fmt.Sprintf("DETAILED COMPARISON LOG FOR: %s\n", safeName))
+			logContent.WriteString(fmt.Sprintf("Created: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+
+			directCopies := c.templateDirectCopies[safeName]
+			fileCount := len(folderLogs[safeName]) + len(directCopies)
+			logContent.WriteString(fmt.Sprintf("Number of files compared: %d\n", fileCount))
+			logContent.WriteString("=============================================\n\n")
+
+			if logs, ok := folderLogs[safeName]; ok && len(logs) > 0 {
+				logContent.WriteString(strings.Join(logs, "\n\n"))
+			}
+
+			if len(directCopies) > 0 {
+				logContent.WriteString("\n\n")
+				// Find filenames that have detailed logs
+				loggedFiles := make(map[string]bool)
+				for _, entry := range logs {
+					if entry.Destination == "template" {
+						loggedFiles[entry.Filename] = true
+					}
+				}
+				for _, fn := range directCopies {
+					if !loggedFiles[fn] {
+						logContent.WriteString("========== BASIC MATCH INFORMATION ==========\n")
+						logContent.WriteString(fmt.Sprintf("File: %s\n", fn))
+						logContent.WriteString(fmt.Sprintf("Template: %s\n", templateName))
+						logContent.WriteString(fmt.Sprintf("Comparison Time: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+						logContent.WriteString("==========================================\n\n")
+						logContent.WriteString("RESULT: MATCH - File is identical to template\n\n")
+					}
+				}
+			}
+
+			if fileCount == 0 {
+				logContent.WriteString("No files matched the template exactly.")
+			}
+
+			os.WriteFile(logPath, []byte(logContent.String()), 0644)
+			c.log(fmt.Sprintf("Saved detailed comparison log to: %s", logPath))
+			delete(folderLogs, safeName)
+		}
+
+		// Mod folder logs
+		for folderName, folderLogContents := range folderLogs {
+			if len(folderLogContents) == 0 {
+				continue
+			}
+			folderPath := filepath.Join(c.OutputFolder, folderName)
+			os.MkdirAll(folderPath, 0755)
+			logPath := filepath.Join(folderPath, fmt.Sprintf("%s_dxfanalyze.log", folderName))
+			var logContent strings.Builder
+			logContent.WriteString(fmt.Sprintf("DETAILED COMPARISON LOG FOR: %s\n", folderName))
+			logContent.WriteString(fmt.Sprintf("Created: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+			logContent.WriteString(fmt.Sprintf("Number of files compared: %d\n", len(folderLogContents)))
+			logContent.WriteString("=============================================\n\n")
+			logContent.WriteString(strings.Join(folderLogContents, "\n\n"))
+			os.WriteFile(logPath, []byte(logContent.String()), 0644)
+			c.log(fmt.Sprintf("Saved detailed comparison log to: %s", logPath))
+		}
+	}
+}
+
+func (c *ComparisonProcessor) ensureAllFoldersHaveLogs() {
+	entries, err := os.ReadDir(c.OutputFolder)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "notemplate" {
+			continue
+		}
+		folderPath := filepath.Join(c.OutputFolder, entry.Name())
+		logPath := filepath.Join(folderPath, fmt.Sprintf("%s_dxfanalyze.log", entry.Name()))
+		if _, err := os.Stat(logPath); err == nil {
+			continue
+		}
+
+		subEntries, _ := os.ReadDir(folderPath)
+		var dxfFiles []string
+		for _, se := range subEntries {
+			if !se.IsDir() && strings.HasSuffix(strings.ToLower(se.Name()), ".dxf") {
+				dxfFiles = append(dxfFiles, se.Name())
+			}
+		}
+		if len(dxfFiles) == 0 {
+			continue
+		}
+
+		c.log(fmt.Sprintf("Creating missing log file for folder: %s", entry.Name()))
+		var logContent strings.Builder
+		logContent.WriteString(fmt.Sprintf("DETAILED COMPARISON LOG FOR: %s\n", entry.Name()))
+		logContent.WriteString(fmt.Sprintf("Created: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+		logContent.WriteString(fmt.Sprintf("Number of files: %d\n", len(dxfFiles)))
+		logContent.WriteString("=============================================\n\n")
+		logContent.WriteString("DXF FILES IN THIS FOLDER:\n")
+		sort.Strings(dxfFiles)
+		for _, f := range dxfFiles {
+			logContent.WriteString(fmt.Sprintf("- %s\n", f))
+		}
+		logContent.WriteString("\n\nNote: This is an automatically generated log for a folder that was missing a detailed log file.\n")
+		os.WriteFile(logPath, []byte(logContent.String()), 0644)
+		c.log(fmt.Sprintf("Saved basic log file to: %s", logPath))
+	}
 }
 
 // --- Helper functions ---
@@ -264,11 +974,12 @@ func extractContent(path string) (*dxf.DXFContent, error) {
 }
 
 // ContentHash creates an MD5 hash from DXF content data
+// Port of Python create_content_hash
 func ContentHash(content *dxf.DXFContent) string {
 	data, err := json.Marshal(struct {
-		Blocks    map[string][][3]float64      `json:"blocks"`
-		Lines     map[string][][2][3]float64    `json:"lines"`
-		Polylines map[string][][3]float64       `json:"polylines"`
+		Blocks    map[string][][3]float64     `json:"blocks"`
+		Lines     map[string][][2][3]float64  `json:"lines"`
+		Polylines map[string][][][3]float64    `json:"polylines"`
 	}{
 		Blocks:    content.Blocks,
 		Lines:     content.Lines,
@@ -316,83 +1027,3 @@ func moveFile(src, dst string, log func(string)) {
 	log(fmt.Sprintf("Moved to: %s", dst))
 }
 
-func (c *ComparisonProcessor) generateDetailedLog(dxfFile, templatePath, templateName string) {
-	safeName := sanitizeFilename(templateName)
-	content1, err1 := extractContent(dxfFile)
-	content2, err2 := extractContent(templatePath)
-
-	var logLines []string
-	logLines = append(logLines, "========== DETAILED COMPARISON LOG ==========")
-	logLines = append(logLines, fmt.Sprintf("File: %s", filepath.Base(dxfFile)))
-	logLines = append(logLines, fmt.Sprintf("Template: %s", templateName))
-
-	if err1 != nil || err2 != nil {
-		logLines = append(logLines, "Error reading DXF data")
-	} else {
-		// Entity counts
-		logLines = append(logLines, "1. ENTITY COUNTS")
-		logLines = append(logLines, fmt.Sprintf("  File Blocks: %d block types", len(content1.Blocks)))
-		logLines = append(logLines, fmt.Sprintf("  Template Blocks: %d block types", len(content2.Blocks)))
-		logLines = append(logLines, fmt.Sprintf("  File Lines: %d layers", len(content1.Lines)))
-		logLines = append(logLines, fmt.Sprintf("  Template Lines: %d layers", len(content2.Lines)))
-
-		// Block differences
-		logLines = append(logLines, "2. BLOCK DIFFERENCES")
-		compareKeys(&logLines, content1.Blocks, content2.Blocks, "Block types")
-
-		// Line differences
-		logLines = append(logLines, "3. LINE DIFFERENCES")
-		compareKeys(&logLines, content1.Lines, content2.Lines, "Line layers")
-
-		// Summary
-		logLines = append(logLines, "5. COMPARISON SUMMARY")
-		logLines = append(logLines, fmt.Sprintf("  RESULT: DIFFERENT - '%s' has differences from template", filepath.Base(dxfFile)))
-	}
-
-	logLines = append(logLines, "==========================================")
-
-	c.detailedLogs[templateName] = append(c.detailedLogs[templateName], logLines...)
-
-	// Save to file
-	logPath := filepath.Join(c.OutputFolder, safeName, safeName+"_dxfanalyze.log")
-	os.WriteFile(logPath, []byte(strings.Join(logLines, "\n")), 0644)
-}
-
-func compareKeys[V any](logLines *[]string, map1, map2 map[string]V, label string) {
-	keys1 := make(map[string]bool)
-	keys2 := make(map[string]bool)
-	for k := range map1 {
-		keys1[k] = true
-	}
-	for k := range map2 {
-		keys2[k] = true
-	}
-
-	onlyIn1 := []string{}
-	onlyIn2 := []string{}
-	for k := range keys1 {
-		if !keys2[k] {
-			onlyIn1 = append(onlyIn1, k)
-		}
-	}
-	for k := range keys2 {
-		if !keys1[k] {
-			onlyIn2 = append(onlyIn2, k)
-		}
-	}
-	sort.Strings(onlyIn1)
-	sort.Strings(onlyIn2)
-
-	if len(onlyIn1) > 0 {
-		*logLines = append(*logLines, fmt.Sprintf("  %s only in file:", label))
-		for _, k := range onlyIn1 {
-			*logLines = append(*logLines, fmt.Sprintf("    - %s", k))
-		}
-	}
-	if len(onlyIn2) > 0 {
-		*logLines = append(*logLines, fmt.Sprintf("  %s only in template:", label))
-		for _, k := range onlyIn2 {
-			*logLines = append(*logLines, fmt.Sprintf("    - %s", k))
-		}
-	}
-}

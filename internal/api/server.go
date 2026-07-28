@@ -1,20 +1,26 @@
 package api
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/compare"
 )
 
+//go:embed frontend_dist
+var frontendFS embed.FS
+
 // Server is the HTTP API server
 type Server struct {
-	mux *http.ServeMux
+	mux          *http.ServeMux
+	frontendFile http.Handler
 
 	// Application state
-	settings     *Settings
+	settings      *Settings
 	compareState  *CompareState
 }
 
@@ -43,11 +49,20 @@ func NewServer() *Server {
 	s := &Server{
 		settings: &Settings{
 			GroupByContent: true,
+			Recursive:      true,
 		},
 		compareState: &CompareState{
 			LogMessages: []string{},
 		},
 	}
+
+	// Create sub-filesystem for frontend (strips the frontend_dist/ prefix)
+	subFS, err := fs.Sub(frontendFS, "frontend_dist")
+	if err != nil {
+		panic(fmt.Sprintf("failed to create sub filesystem: %v", err))
+	}
+	s.frontendFile = http.FileServer(http.FS(subFS))
+
 	s.mux = http.NewServeMux()
 	s.routes()
 	return s
@@ -78,20 +93,43 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Static file serving for frontend (if embedded)
-	if !strings.HasPrefix(r.URL.Path, "/api/") {
-		s.serveFrontend(w, r)
+	// API routes
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		s.mux.ServeHTTP(w, r)
 		return
 	}
 
-	s.mux.ServeHTTP(w, r)
+	// Serve frontend (SPA fallback)
+	s.serveFrontend(w, r)
 }
 
 func (s *Server) serveFrontend(w http.ResponseWriter, r *http.Request) {
-	// TODO: serve embedded React frontend
-	// For now, return a simple HTML placeholder
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<!DOCTYPE html><html><head><title>DXFchk</title></head><body style="background:#1a1a1a;color:#008a00;font-family:monospace;padding:2rem"><h1>DXFchk v0.1.0</h1><p>API is running. Frontend not yet built.</p><p>Health: <a href="/api/v1/health" style="color:#00ff41">/api/v1/health</a></p></body></html>`)
+	// For SPA: serve index.html for non-file routes
+	rPath := r.URL.Path
+	if rPath == "/" {
+		s.frontendFile.ServeHTTP(w, r)
+		return
+	}
+
+	// Try to serve the file directly
+	fSub, err := fs.Sub(frontendFS, "frontend_dist")
+	if err != nil {
+		http.Error(w, "frontend not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if file exists
+	f, err := fSub.Open(strings.TrimPrefix(rPath, "/"))
+	if err != nil {
+		// SPA fallback: serve index.html
+		r.URL.Path = "/"
+		s.frontendFile.ServeHTTP(w, r)
+		return
+	}
+	f.Close()
+
+	// File exists, serve it
+	s.frontendFile.ServeHTTP(w, r)
 }
 
 // JSONResponse writes a JSON response

@@ -10,9 +10,9 @@ cmd/dxfchk/dxfchk
 coverage.txt
 
 # Node/Frontend
-web/node_modules/
-web/dist/
-!web/dist/.gitkeep
+frontend/node_modules/
+frontend/dist/
+!frontend/dist/.gitkeep
 
 # Python (reference source, not built)
 __pycache__/
