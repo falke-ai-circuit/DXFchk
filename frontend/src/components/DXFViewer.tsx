@@ -110,7 +110,7 @@ interface DXFViewerProps {
 }
 
 export default function DXFViewer({
-  entities,
+  entities = [],
   boundingBox,
   layers = [],
   layerColors = {},
@@ -211,6 +211,7 @@ export default function DXFViewer({
 
   const isEntityVisible = (e: DiffEntity) => {
     if (!e.layer) return true;
+    if (visibleLayers.size === 0) return true; // empty set = all visible
     return visibleLayers.has(e.layer);
   };
 
@@ -257,6 +258,7 @@ export default function DXFViewer({
 
   // Render a single entity (used both for top-level and block entities)
   const renderEntity = (e: DiffEntity, i: number): React.ReactNode => {
+    if (!e || !e.coords) return null;
     const color = entityColor(e);
     const isHovered = hoveredEntity === i;
     const strokeW = isHovered ? 2 : Math.max(0.5, 1.5 / zoom);
@@ -277,6 +279,7 @@ export default function DXFViewer({
 
       case 'lwpolyline':
       case 'polyline': {
+        if (!e.coords_2d || e.coords_2d.length === 0) return null;
         const pts = e.coords_2d.map(p => [p[0], -p[1]]);
         const path = polylineToPath({ ...e, coords_2d: pts });
         return path ? (
@@ -481,7 +484,7 @@ export default function DXFViewer({
           {entities[hoveredEntity].attribs && entities[hoveredEntity].attribs.length > 0 && (
             <span style={{ color: 'var(--text-muted)' }}> | {entities[hoveredEntity].attribs.length} attrs</span>
           )}
-          {entities[hoveredEntity].coords.length >= 2 && (
+          {entities[hoveredEntity].coords && entities[hoveredEntity].coords.length >= 2 && (
             <span style={{ color: 'var(--text-muted)' }}>
               {' '}({entities[hoveredEntity].coords[0].toFixed(2)}, {entities[hoveredEntity].coords[1].toFixed(2)})
             </span>
@@ -502,5 +505,5 @@ export default function DXFViewer({
 }
 
 function entityKey(e: DiffEntity): string {
-  return `${e.type}:${e.block_name}:${e.coords.map(c => c.toFixed(2)).join(',')}`;
+  return `${e.type}:${e.block_name}:${(e.coords || []).map(c => c.toFixed(2)).join(',')}`;
 }

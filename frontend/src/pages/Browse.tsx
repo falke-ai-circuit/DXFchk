@@ -47,6 +47,20 @@ export default function Browse() {
     loadTree();
   }, [loadTree]);
 
+  // Auto-select file from URL query param: /browse?file=PATH
+  // handleFileClick is defined below, so we use a ref to call it
+  const autoFileRef = useRef<string | null>(null);
+  const pendingFileRef = useRef<string | null>(null);
+
+  // Read the file param once on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fileParam = params.get('file');
+    if (fileParam) {
+      pendingFileRef.current = fileParam;
+    }
+  }, []);
+  
   const loadGroups = async () => {
     if (!outputFolder) return;
     setGroupsLoading(true);
@@ -166,6 +180,16 @@ export default function Browse() {
       setDiffLoading(false);
     }
   };
+
+  // Auto-select file from URL query param after projects are loaded
+  useEffect(() => {
+    if (autoFileRef.current) return; // only once
+    if (!activeProject || !outputFolder) return; // wait for project
+    if (pendingFileRef.current) {
+      autoFileRef.current = pendingFileRef.current;
+      handleFileClick(pendingFileRef.current, '');
+    }
+  }, [activeProject, outputFolder, loadTree]);
 
   const handleSwitchCompareMode = async (mode: 'template' | 'mod') => {
     if (!selectedFile) return;
@@ -439,11 +463,11 @@ export default function Browse() {
                       {diff.summary.removed_count > 0 && <span style={{ color: 'var(--warning)' }}>-{diff.summary.removed_count} removed</span>}
                     </div>
                     <DXFViewer
-                      entities={diff.module_entities}
+                      entities={diff.module_entities || []}
                       boundingBox={diff.bounding_box}
                       highlightAdded={true}
-                      addedSet={new Set(diff.added.map(e => entityKey(e)))}
-                      removedSet={new Set(diff.removed.map(e => entityKey(e)))}
+                      addedSet={new Set((diff.added || []).map(e => entityKey(e)))}
+                      removedSet={new Set((diff.removed || []).map(e => entityKey(e)))}
                       showInfoPanel={true}
                     />
                   </div>
@@ -476,9 +500,9 @@ export default function Browse() {
                       </div>
                     )}
                     <DXFViewer
-                      entities={renderData.entities}
+                      entities={renderData.entities || []}
                       boundingBox={renderData.bounding_box}
-                      layers={renderData.layers}
+                      layers={renderData.layers || []}
                       layerColors={renderData.layer_colors || {}}
                       showInfoPanel={true}
                     />
@@ -662,8 +686,8 @@ function TreeView({ node, level, selectedFile, onFileClick, onContextMenu }: {
 
 // entityKey generates a unique key for an entity (used for diff set lookup)
 function entityKey(e: DiffEntity): string {
-  const coords = e.coords.map(c => c.toFixed(2)).join(',');
-  return `${e.type}:${e.block_name}:${coords}`;
+  const coords = (e.coords || []).map(c => c.toFixed(2)).join(',');
+  return `${e.type}:${e.block_name || ''}:${coords}`;
 }
 
 function formatSize(bytes: number): string {

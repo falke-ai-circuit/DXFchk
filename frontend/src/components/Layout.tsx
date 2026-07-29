@@ -1,8 +1,16 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, Loader2, Square } from 'lucide-react';
+import { useStore } from '../store';
 
 export default function Layout() {
+  const fetchProjects = useStore(s => s.fetchProjects);
+
+  // Fetch projects on app load so activeProject is populated on all pages
+  React.useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
+
   const tabStyle = (isActive: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
