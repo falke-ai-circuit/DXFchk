@@ -47,7 +47,9 @@ export default function Dashboard() {
   const [outputFolder, setOutputFolder] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [browserTarget, setBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
+  const [editBrowserTarget, setEditBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
   const fileImportRef = useRef<HTMLInputElement>(null);
   const zipImportRef = useRef<HTMLInputElement>(null);
 
@@ -85,20 +87,21 @@ export default function Dashboard() {
     e.stopPropagation();
     if (!confirm('Delete this project?')) return;
     await deleteProject(id);
+    if (editingProject?.id === id) setEditingProject(null);
   };
 
   const handleSelect = async (id: string) => {
     await selectProject(id);
-    // Also open edit modal so user can adjust folders
+    // Show inline settings panel for this project
     const proj = projects.find(p => p.id === id);
     if (proj) {
       setEditingProject({ ...proj });
+      setEditError(null);
     }
   };
 
   const handleExport = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // Download project config as JSON
     api.exportProject(id).then(project => {
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -112,7 +115,6 @@ export default function Dashboard() {
 
   const handleZipExport = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // Download full project as zip
     const url = api.zipExportUrl(id);
     const a = document.createElement('a');
     a.href = url;
@@ -148,13 +150,9 @@ export default function Dashboard() {
     if (zipImportRef.current) zipImportRef.current.value = '';
   };
 
-  const handleEditProject = (project: Project, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingProject({ ...project });
-  };
-
   const handleSaveEdit = async () => {
     if (!editingProject) return;
+    setEditError(null);
     try {
       await api.updateProject(editingProject.id, {
         name: editingProject.name,
@@ -166,9 +164,9 @@ export default function Dashboard() {
         move_files: editingProject.move_files,
       });
       await fetchProjects();
-      setEditingProject(null);
+      await selectProject(editingProject.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save');
+      setEditError(err instanceof Error ? err.message : 'Failed to save');
     }
   };
 
@@ -181,10 +179,10 @@ export default function Dashboard() {
 
   const handleEditBrowserSelect = (path: string) => {
     if (!editingProject) return;
-    if (browserTarget === 'template') setEditingProject({ ...editingProject, template_folder: path });
-    else if (browserTarget === 'search') setEditingProject({ ...editingProject, search_folder: path });
-    else if (browserTarget === 'output') setEditingProject({ ...editingProject, output_folder: path });
-    setBrowserTarget(null);
+    if (editBrowserTarget === 'template') setEditingProject({ ...editingProject, template_folder: path });
+    else if (editBrowserTarget === 'search') setEditingProject({ ...editingProject, search_folder: path });
+    else if (editBrowserTarget === 'output') setEditingProject({ ...editingProject, output_folder: path });
+    setEditBrowserTarget(null);
   };
 
   const matched = compareStatus?.matched ?? results.filter(r => r.status === 'match').length;
@@ -204,36 +202,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Active Project Card */}
-      {activeProject ? (
-        <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-            <FolderCog size={18} color="var(--accent)" />
-            <h2 style={{ fontSize: '16px', fontWeight: 600 }}>{activeProject.name}</h2>
-            <span className="badge badge-success" style={{ marginLeft: 'auto' }}>Active</span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Template Folder</div>
-              <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{activeProject.template_folder}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Search Folder</div>
-              <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{activeProject.search_folder}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Output Folder</div>
-              <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{activeProject.output_folder}</div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="card" style={{ marginBottom: '16px', textAlign: 'center', padding: '32px' }}>
-          <FolderOpen size={32} color="var(--text-muted)" style={{ marginBottom: '8px' }} />
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>No active project. Create one below, import a config, or import a zip.</p>
-        </div>
-      )}
-
       {/* Stats Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <StatCard icon={<Files size={20} />} label="Total Files" value={total} color="var(--accent)" />
@@ -243,97 +211,163 @@ export default function Dashboard() {
         <StatCard icon={<FileSearch size={20} />} label="Templates" value={templateCount} color="var(--info)" />
       </div>
 
-      {/* Projects List */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Projects</h2>
-        <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12 }} onClick={() => setShowCreate(!showCreate)}>
-          <Plus size={14} /> New Project
-        </button>
-        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => fileImportRef.current?.click()} title="Import project config JSON">
-          <Upload size={14} /> Import Config
-        </button>
-        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => zipImportRef.current?.click()} title="Import full project zip (folders + files)">
-          <Package size={14} /> Import ZIP
-        </button>
-        <input ref={fileImportRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
-        <input ref={zipImportRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleZipImport} />
-      </div>
-
-      {/* Create Project Form */}
-      {showCreate && (
-        <div className="card" style={{ marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '13px', fontWeight: 600, marginBottom: '12px' }}>Create New Project</h3>
-          {error && (
-            <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '8px 12px', marginBottom: '12px', color: 'var(--error)', fontSize: 12 }}>
-              {error}
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div>
-              <label style={labelStyle}>Project Name</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse Comparison" style={inputStyle} />
-            </div>
-            <FolderInput label="Template Folder (contains DXF templates)" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
-            <FolderInput label="Search Folder (contains DXF files to compare)" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />
-            <FolderInput label="Output Folder (optional — defaults to {search}/DXFchk_output)" value={outputFolder} onChange={setOutputFolder} onBrowse={() => setBrowserTarget('output')} />
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
-                {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
-                Create Project
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-            </div>
+      {/* Two-column layout: project list (left) + settings panel (right) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        {/* Left: Project List */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Projects</h2>
+            <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12 }} onClick={() => setShowCreate(!showCreate)}>
+              <Plus size={14} /> New
+            </button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => fileImportRef.current?.click()} title="Import project config JSON">
+              <Upload size={14} />
+            </button>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => zipImportRef.current?.click()} title="Import full project zip">
+              <Package size={14} />
+            </button>
+            <input ref={fileImportRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+            <input ref={zipImportRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleZipImport} />
           </div>
-        </div>
-      )}
 
-      {/* Project List */}
-      {projects.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '24px' }}>
-          <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No projects yet. Create one to start comparing DXF files.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {projects.map(p => (
-            <div
-              key={p.id}
-              className="card"
-              onClick={() => handleSelect(p.id)}
-              style={{
-                cursor: 'pointer',
-                borderLeft: activeProject?.id === p.id ? '3px solid var(--accent)' : '3px solid transparent',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                padding: '12px 16px',
-              }}
-            >
-              <Folder size={20} color={activeProject?.id === p.id ? 'var(--accent)' : 'var(--text-muted)'} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: '14px', fontWeight: 600 }}>{p.name}</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  {p.template_folder.split('\\').pop()} → {p.search_folder.split('\\').pop()}
+          {/* Create Project Form */}
+          {showCreate && (
+            <div className="card" style={{ marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '13px', fontWeight: 600, marginBottom: '12px' }}>Create New Project</h3>
+              {error && (
+                <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '8px 12px', marginBottom: '12px', color: 'var(--error)', fontSize: 12 }}>
+                  {error}
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div>
+                  <label style={labelStyle}>Project Name</label>
+                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse Comparison" style={inputStyle} />
+                </div>
+                <FolderInput label="Template Folder" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
+                <FolderInput label="Search Folder" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />
+                <FolderInput label="Output Folder (optional)" value={outputFolder} onChange={setOutputFolder} onBrowse={() => setBrowserTarget('output')} />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
+                    {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+                    Create
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
                 </div>
               </div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {new Date(p.last_used).toLocaleDateString()}
-              </span>
-              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleEditProject(p, e)} title="Edit project details">
-                <FolderCog size={12} />
-              </button>
-              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleExport(p.id, e)} title="Export config JSON">
-                <Download size={12} />
-              </button>
-              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleZipExport(p.id, e)} title="Export full project as ZIP">
-                <Package size={12} />
-              </button>
-              <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleDelete(p.id, e)}>
-                <Trash2 size={12} />
-              </button>
             </div>
-          ))}
+          )}
+
+          {/* Project List */}
+          {projects.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', padding: '24px' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>No projects yet.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {projects.map(p => (
+                <div
+                  key={p.id}
+                  className="card"
+                  onClick={() => handleSelect(p.id)}
+                  style={{
+                    cursor: 'pointer',
+                    borderLeft: activeProject?.id === p.id ? '3px solid var(--accent)' : '3px solid transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '12px 16px',
+                  }}
+                >
+                  <Folder size={20} color={activeProject?.id === p.id ? 'var(--accent)' : 'var(--text-muted)'} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.template_folder.split('\\').pop()} → {p.search_folder.split('\\').pop()}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
+                    {new Date(p.last_used).toLocaleDateString()}
+                  </span>
+                  <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); handleExport(p.id, e); }} title="Export config">
+                    <Download size={12} />
+                  </button>
+                  <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); handleZipExport(p.id, e); }} title="Export ZIP">
+                    <Package size={12} />
+                  </button>
+                  <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 11, flexShrink: 0 }} onClick={(e) => handleDelete(p.id, e)}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Right: Project Settings Panel (inline, not modal) */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Project Settings</h2>
+          </div>
+
+          {editingProject ? (
+            <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <FolderCog size={18} color="var(--accent)" />
+                <span style={{ fontSize: 14, fontWeight: 600 }}>{activeProject?.id === editingProject.id ? 'Active: ' : ''}{editingProject.name}</span>
+                <span className="badge badge-success" style={{ marginLeft: 'auto' }}>Editing</span>
+              </div>
+
+              {editError && (
+                <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '8px 12px', marginBottom: '12px', color: 'var(--error)', fontSize: 12 }}>
+                  {editError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div>
+                  <label style={labelStyle}>Project Name</label>
+                  <input type="text" value={editingProject.name} onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })} style={inputStyle} />
+                </div>
+                <FolderInput label="Template Folder" value={editingProject.template_folder} onChange={(v) => setEditingProject({ ...editingProject, template_folder: v })} onBrowse={() => setEditBrowserTarget('template')} />
+                <FolderInput label="Search Folder" value={editingProject.search_folder} onChange={(v) => setEditingProject({ ...editingProject, search_folder: v })} onBrowse={() => setEditBrowserTarget('search')} />
+                <FolderInput label="Output Folder" value={editingProject.output_folder} onChange={(v) => setEditingProject({ ...editingProject, output_folder: v })} onBrowse={() => setEditBrowserTarget('output')} />
+                <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                    <input type="checkbox" checked={editingProject.recursive} onChange={(e) => setEditingProject({ ...editingProject, recursive: e.target.checked })} />
+                    Recursive
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                    <input type="checkbox" checked={editingProject.group_by_content} onChange={(e) => setEditingProject({ ...editingProject, group_by_content: e.target.checked })} />
+                    Group by content
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                    <input type="checkbox" checked={editingProject.move_files} onChange={(e) => setEditingProject({ ...editingProject, move_files: e.target.checked })} />
+                    Move files
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <button className="btn btn-primary" onClick={handleSaveEdit}>
+                    <Save size={14} /> Save Changes
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setEditingProject(null)}>Close</button>
+                </div>
+              </div>
+
+              {/* Quick info */}
+              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                <div>ID: {editingProject.id}</div>
+                <div>Last used: {new Date(editingProject.last_used).toLocaleString()}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="card" style={{ textAlign: 'center', padding: '32px' }}>
+              <FolderCog size={32} color="var(--text-muted)" style={{ marginBottom: '8px' }} />
+              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Click a project to view and edit its settings.</p>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Progress + Logs (if running) */}
       {compareStatus?.running && (
@@ -367,63 +401,22 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Folder Browser Modal */}
+      {/* Folder Browser Modal — for create form */}
       {browserTarget && (
         <FolderBrowser
           initialPath={browserTarget === 'template' ? templateFolder : browserTarget === 'search' ? searchFolder : outputFolder}
-          onSelect={editingProject ? handleEditBrowserSelect : handleBrowserSelect}
+          onSelect={handleBrowserSelect}
           onClose={() => setBrowserTarget(null)}
         />
       )}
 
-      {/* Edit Project Modal */}
-      {editingProject && (
-        <div
-          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
-          onClick={() => setEditingProject(null)}
-        >
-          <div
-            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, width: '600px', maxHeight: '80vh', overflow: 'auto', padding: '24px' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-              <FolderCog size={20} color="var(--accent)" />
-              <h2 style={{ fontSize: '18px', fontWeight: 700 }}>Edit Project</h2>
-              <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 8px' }} onClick={() => setEditingProject(null)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={labelStyle}>Project Name</label>
-                <input type="text" value={editingProject.name} onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })} style={inputStyle} />
-              </div>
-              <FolderInput label="Template Folder" value={editingProject.template_folder} onChange={(v) => setEditingProject({ ...editingProject, template_folder: v })} onBrowse={() => setBrowserTarget('template')} />
-              <FolderInput label="Search Folder" value={editingProject.search_folder} onChange={(v) => setEditingProject({ ...editingProject, search_folder: v })} onBrowse={() => setBrowserTarget('search')} />
-              <FolderInput label="Output Folder" value={editingProject.output_folder} onChange={(v) => setEditingProject({ ...editingProject, output_folder: v })} onBrowse={() => setBrowserTarget('output')} />
-              <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
-                  <input type="checkbox" checked={editingProject.recursive} onChange={(e) => setEditingProject({ ...editingProject, recursive: e.target.checked })} />
-                  Recursive
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
-                  <input type="checkbox" checked={editingProject.group_by_content} onChange={(e) => setEditingProject({ ...editingProject, group_by_content: e.target.checked })} />
-                  Group by content
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
-                  <input type="checkbox" checked={editingProject.move_files} onChange={(e) => setEditingProject({ ...editingProject, move_files: e.target.checked })} />
-                  Move files
-                </label>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-                <button className="btn btn-primary" onClick={handleSaveEdit}>
-                  <Save size={14} /> Save Changes
-                </button>
-                <button className="btn btn-ghost" onClick={() => setEditingProject(null)}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Folder Browser Modal — for edit panel */}
+      {editBrowserTarget && (
+        <FolderBrowser
+          initialPath={editBrowserTarget === 'template' ? editingProject?.template_folder || '' : editBrowserTarget === 'search' ? editingProject?.search_folder || '' : editingProject?.output_folder || ''}
+          onSelect={handleEditBrowserSelect}
+          onClose={() => setEditBrowserTarget(null)}
+        />
       )}
     </div>
   );

@@ -494,7 +494,8 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
   selectedFile: string | null;
   onFileClick: (filePath: string, folderPath: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(level === 0);
+  // Auto-expand root (level 0) and template folders (level 1) so _modN subfolders are visible
+  const [expanded, setExpanded] = useState(level <= 1);
 
   const isDXF = !node.is_dir && node.name.toLowerCase().endsWith('.dxf');
   const isLog = !node.is_dir && node.name.toLowerCase().endsWith('.log');
