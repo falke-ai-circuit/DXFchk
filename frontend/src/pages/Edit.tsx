@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Wrench, FolderTree, Folder, FileText, ChevronRight, ChevronDown,
-  RefreshCw, Loader2, Save, Code, Play, Layers, Eye, Plus,
+  RefreshCw, Loader2, Save, Code, Play, Layers, Eye, Plus, ExternalLink,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type TreeNode, type TemplateGroup, type DXFRenderResponse } from '../api';
@@ -126,6 +126,17 @@ export default function Edit() {
     try {
       const resp = await api.createTemplate(filePath, activeProject?.template_folder);
       setCreateTemplateMsg(`✓ Template created: ${resp.name}`);
+    } catch (err) {
+      setCreateTemplateMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+  };
+
+  const handleOpenExternal = async (filePath: string) => {
+    setCreateTemplateMsg('Opening in external editor...');
+    setContextMenu(null);
+    try {
+      const resp = await api.openExternal(filePath);
+      setCreateTemplateMsg(`✓ Opened in ${resp.editor || 'default editor'}`);
     } catch (err) {
       setCreateTemplateMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown'}`);
     }
@@ -360,6 +371,15 @@ export default function Edit() {
           >
             <Plus size={14} color="var(--accent)" />
             Create template from this file
+          </div>
+          <div
+            onClick={() => { handleOpenExternal(contextMenu.filePath); }}
+            style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <ExternalLink size={14} color="var(--accent)" />
+            Open in external editor
           </div>
           <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
           <div

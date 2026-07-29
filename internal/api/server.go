@@ -29,14 +29,15 @@ type Server struct {
 
 // Settings holds the application settings
 type Settings struct {
-	TemplateFolder   string `json:"template_folder"`
-	SearchFolder     string `json:"search_folder"`
-	OutputFolder     string `json:"output_folder"`
-	Recursive        bool   `json:"recursive"`
-	MoveFiles        bool   `json:"move_files"`
-	GroupByContent   bool   `json:"group_by_content"`
-	AutoCreateMod    bool   `json:"auto_create_mod_templates"`
-	AutoApplyToGroup  bool  `json:"auto_apply_to_group"`
+	TemplateFolder    string `json:"template_folder"`
+	SearchFolder      string `json:"search_folder"`
+	OutputFolder      string `json:"output_folder"`
+	Recursive         bool   `json:"recursive"`
+	MoveFiles         bool   `json:"move_files"`
+	GroupByContent    bool   `json:"group_by_content"`
+	AutoCreateMod     bool   `json:"auto_create_mod_templates"`
+	AutoApplyToGroup  bool   `json:"auto_apply_to_group"`
+	ExternalEditorPath string `json:"external_editor_path"` // path to CAD editor exe, empty = use Windows default
 }
 
 // CompareState holds the current comparison state
@@ -115,6 +116,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/browse/system", s.handleBrowseSystem)
 	s.mux.HandleFunc("GET /api/v1/project/zip-export", s.handleProjectZipExport)
 	s.mux.HandleFunc("POST /api/v1/project/zip-import", s.handleProjectZipImport)
+	s.mux.HandleFunc("POST /api/v1/open", s.handleOpenExternal) // open DXF in external editor
 }
 
 // ServeHTTP implements http.Handler

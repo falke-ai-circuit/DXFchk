@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderTree, Folder, FileText, ChevronRight, ChevronDown,
   RefreshCw, Loader2, GitCompare, Plus, AlertCircle, Wrench, Layers, FileText as FileLog,
+  ExternalLink,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup, type DXFRenderResponse } from '../api';
@@ -25,6 +26,8 @@ export default function Browse() {
   const [compareMode, setCompareMode] = useState<'template' | 'mod'>('template');
   const [renderData, setRenderData] = useState<DXFRenderResponse | null>(null);
   const [renderLoading, setRenderLoading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string } | null>(null);
+  const [externalMsg, setExternalMsg] = useState<string | null>(null);
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -221,6 +224,23 @@ export default function Browse() {
     }
   };
 
+  const handleOpenExternal = async (filePath: string) => {
+    setExternalMsg('Opening in external editor...');
+    setContextMenu(null);
+    try {
+      const resp = await api.openExternal(filePath);
+      setExternalMsg(`✓ Opened in ${resp.editor || 'default editor'}`);
+    } catch (err) {
+      setExternalMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+  };
+
+  const handleBrowseContextMenu = (e: React.MouseEvent, filePath: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, filePath });
+  };
+
   if (!activeProject) {
     return (
       <div style={{ padding: '24px', textAlign: 'center' }}>
@@ -292,8 +312,8 @@ export default function Browse() {
           </div>
         )}
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-          <TreeView node={tree} level={0} selectedFile={selectedFile} onFileClick={handleFileClick} />
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }} onClick={() => setContextMenu(null)}>
+          <TreeView node={tree} level={0} selectedFile={selectedFile} onFileClick={handleFileClick} onContextMenu={handleBrowseContextMenu} />
         </div>
       </div>
 
@@ -502,16 +522,74 @@ export default function Browse() {
           </div>
         )}
       </div>
+
+      {/* External editor message */}
+      {externalMsg && (
+        <div style={{ position: 'fixed', bottom: 60, right: 16, padding: '8px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--accent)', borderRadius: 6, fontSize: 12, color: 'var(--accent)', zIndex: 1000 }}>
+          {externalMsg}
+        </div>
+      )}
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed', top: contextMenu.y, left: contextMenu.x,
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            borderRadius: 6, padding: '4px 0', zIndex: 2000,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)', minWidth: 220,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            onClick={() => { handleOpenExternal(contextMenu.filePath); }}
+            style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <ExternalLink size={14} color="var(--accent)" />
+            Open in external editor
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+          <div
+            onClick={() => { handleFileClick(contextMenu.filePath, ''); setContextMenu(null); }}
+            style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <GitCompare size={14} color="var(--accent)" />
+            View diff with template
+          </div>
+          {contextMenu.filePath.includes('_mod') && (
+            <div
+              onClick={() => {
+                const parts = contextMenu.filePath.split('\\\\');
+                const modFolder = parts.find(p => p.includes('_mod'));
+                if (modFolder) {
+                  const groupName = modFolder.split('_mod')[0];
+                  handleApplyTemplate(groupName, contextMenu.filePath);
+                }
+                setContextMenu(null);
+              }}
+              style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Wrench size={14} color="var(--accent)" />
+              Apply as fixed template to group
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
-
-// TreeView renders a tree node recursively
-function TreeView({ node, level, selectedFile, onFileClick }: {
+function TreeView({ node, level, selectedFile, onFileClick, onContextMenu }: {
   node: TreeNode;
   level: number;
   selectedFile: string | null;
   onFileClick: (filePath: string, folderPath: string) => void;
+  onContextMenu: (e: React.MouseEvent, filePath: string) => void;
 }) {
   // Auto-expand root (level 0) and template folders (level 1) so _modN subfolders are visible
   const [expanded, setExpanded] = useState(level <= 1);
@@ -523,6 +601,7 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
     return (
       <div
         onClick={() => (isDXF || isLog) && onFileClick(node.path, '')}
+        onContextMenu={(e) => isDXF && onContextMenu(e, node.path)}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -573,7 +652,7 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
       {expanded && node.children && (
         <div>
           {node.children.map((child, i) => (
-            <TreeView key={i} node={child} level={level + 1} selectedFile={selectedFile} onFileClick={onFileClick} />
+            <TreeView key={i} node={child} level={level + 1} selectedFile={selectedFile} onFileClick={onFileClick} onContextMenu={onContextMenu} />
           ))}
         </div>
       )}

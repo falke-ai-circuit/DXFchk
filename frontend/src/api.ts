@@ -15,6 +15,7 @@ export interface SettingsResponse {
   group_by_content: boolean;
   auto_create_mod_templates: boolean;
   auto_apply_to_group: boolean;
+  external_editor_path?: string;
 }
 
 export interface Project {
@@ -385,4 +386,12 @@ export const api = {
     return fetch('/api/v1/project/zip-import', { method: 'POST', body: formData })
       .then(r => r.json());
   },
+
+  // Open DXF in external editor
+  openExternal: (filePath: string) =>
+    apiFetch<{ ok: boolean; launched: boolean; editor: string }>('/api/v1/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }),
 };

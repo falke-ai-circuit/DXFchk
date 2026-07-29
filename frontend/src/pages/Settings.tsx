@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, CheckCircle, XCircle, Loader2, Heart, Wrench, Layers } from 'lucide-react';
+import { Settings as SettingsIcon, Save, CheckCircle, XCircle, Loader2, Heart, Wrench, Layers, ExternalLink } from 'lucide-react';
 import { useStore } from '../store';
 import type { SettingsResponse } from '../api';
 
@@ -190,6 +190,19 @@ export default function Settings() {
           Each _modN folder contains files with the same type of difference. Fix one template per group
           in the Edit page, then apply it to all files in that group — instead of fixing each file individually.
         </div>
+      </div>
+
+      {/* External Editor */}
+      <div className="card" style={{ marginBottom: '16px' }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <ExternalLink size={16} color="var(--accent)" />
+          External Editor
+        </h2>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: '12px' }}>
+          Path to your CAD editor (BricsCAD, DNA Explorer, etc.). Leave empty to use the Windows default .dxf association.
+        </div>
+        <label style={labelStyle}>Editor Path (optional)</label>
+        <input type="text" value={form.external_editor_path || ''} onChange={(e) => setForm({ ...form, external_editor_path: e.target.value })} placeholder="C:\\Program Files\\Bricsys\\BricsCAD V22 en_US\\bricscad.exe" style={inputStyle} />
       </div>
 
       {/* Save Button */}
