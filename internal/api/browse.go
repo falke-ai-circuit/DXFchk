@@ -53,8 +53,8 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build tree (max depth 3 to keep response size manageable)
-	tree := buildTreeNode(outputFolder, filepath.Base(outputFolder), 0, 3)
+	// Build tree (max depth 5 to show nested _modN under template folders)
+	tree := buildTreeNode(outputFolder, filepath.Base(outputFolder), 0, 5)
 
 	JSONResponse(w, http.StatusOK, map[string]any{
 		"tree":  tree,

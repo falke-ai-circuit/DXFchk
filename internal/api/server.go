@@ -22,7 +22,7 @@ type Server struct {
 
 	// Application state
 	settings      *Settings
-	compareState  *CompareState
+	jobs          *JobManager
 	session       *SessionState
 	stopChan      chan struct{}
 }
@@ -62,9 +62,7 @@ func NewServer() *Server {
 			GroupByContent: true,
 			Recursive:      true,
 		},
-		compareState: &CompareState{
-			LogMessages: []string{},
-		},
+		jobs: NewJobManager(),
 	}
 
 	// Create sub-filesystem for frontend (strips the frontend_dist/ prefix)
@@ -89,6 +87,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/templates", s.handleGetTemplates)
 	s.mux.HandleFunc("POST /api/v1/compare", s.handleCompare)
 	s.mux.HandleFunc("GET /api/v1/compare/status", s.handleCompareStatus)
+	s.mux.HandleFunc("GET /api/v1/compare/jobs", s.handleAllJobs) // all running jobs
+	s.mux.HandleFunc("POST /api/v1/compare/stop", s.handleCompareStop)
 	s.mux.HandleFunc("GET /api/v1/results", s.handleResults)
 	s.mux.HandleFunc("GET /api/v1/projects", s.handleProjects)
 	s.mux.HandleFunc("POST /api/v1/projects", s.handleProjects)
@@ -99,7 +99,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/browse/folder", s.handleBrowseFolder)
 	s.mux.HandleFunc("POST /api/v1/diff", s.handleDXFDiff)
 	s.mux.HandleFunc("POST /api/v1/template/create", s.handleCreateTemplate)
-	s.mux.HandleFunc("POST /api/v1/compare/stop", s.handleCompareStop)
 	s.mux.HandleFunc("POST /api/v1/compare/resume", s.handleCompareResume)
 	s.mux.HandleFunc("GET /api/v1/session", s.handleSession)
 	s.mux.HandleFunc("DELETE /api/v1/session", s.handleSession)

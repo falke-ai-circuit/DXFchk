@@ -1,8 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, Wrench, Loader2, Square } from 'lucide-react';
-import { useStore } from '../store';
-import { api } from '../api';
 
 export default function Layout() {
   const tabStyle = (isActive: boolean): React.CSSProperties => ({
@@ -96,34 +94,28 @@ export default function Layout() {
 }
 
 function GlobalStatusBar() {
-  const { compareStatus, fetchCompareStatus } = useStore();
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [jobs, setJobs] = React.useState<any[]>([]); // running jobs from /api/v1/compare/jobs
 
-  // Poll every 2 seconds for status — only when running
+  // Poll every 2 seconds for all running jobs
   React.useEffect(() => {
-    // Always do an initial check
-    fetchCompareStatus();
-
-    const interval = setInterval(() => {
-      // Poll when comparison is running OR if we don't know the state yet
-      const st = useStore.getState().compareStatus;
-      if (st?.running || st === null) {
-        fetchCompareStatus();
-      }
-    }, 2000);
-
+    const fetchJobs = async () => {
+      try {
+        const res = await fetch('/api/v1/compare/jobs');
+        if (res.ok) {
+          const data = await res.json();
+          setJobs(data.jobs || []);
+        }
+      } catch { /* ignore */ }
+    };
+    fetchJobs();
+    const interval = setInterval(fetchJobs, 2000);
     return () => clearInterval(interval);
-  }, [fetchCompareStatus]);
+  }, []);
 
-  if (!compareStatus?.running) return null;
+  if (jobs.length === 0) return null;
 
-  const progress = compareStatus.progress || 0;
-  const processed = compareStatus.processed_files || 0;
-  const total = compareStatus.total_files || 0;
-  const elapsed = compareStatus.elapsed_time || '00:00:00';
-  const eta = compareStatus.eta || '--:--:--';
-  const matched = compareStatus.matched || 0;
-  const different = compareStatus.different || 0;
+  const runningJobs = jobs.filter(j => j.running);
+  if (runningJobs.length === 0) return null;
 
   return (
     <div
@@ -131,47 +123,46 @@ function GlobalStatusBar() {
         flexShrink: 0,
         backgroundColor: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border)',
-        padding: collapsed ? '4px 12px' : '8px 12px',
+        padding: '4px 12px',
         display: 'flex',
         alignItems: 'center',
-        gap: '12px',
+        gap: '8px',
         fontSize: '11px',
         fontFamily: 'var(--font-mono)',
+        maxWidth: '100%',
+        overflowX: 'auto',
       }}
     >
       <Loader2 size={12} className="spin" color="var(--accent)" />
-      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-        Comparing
+      <span style={{ color: 'var(--accent)', fontWeight: 600, flexShrink: 0 }}>
+        {runningJobs.length > 1 ? `${runningJobs.length} jobs` : 'Comparing'}
       </span>
-      <span style={{ color: 'var(--text-secondary)' }}>
-        {processed} / {total} ({progress.toFixed(1)}%)
-      </span>
-      <div style={{ flex: 1, maxWidth: 200, height: 6, backgroundColor: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${Math.min(100, progress)}%`, height: '100%', backgroundColor: 'var(--accent)', transition: 'width 0.3s ease' }} />
-      </div>
-      <span style={{ color: 'var(--text-muted)' }}>
-        Elapsed: {elapsed}
-      </span>
-      <span style={{ color: 'var(--text-muted)' }}>
-        ETA: {eta}
-      </span>
-      <span style={{ color: 'var(--success)' }}>
-        ✓ {matched}
-      </span>
-      <span style={{ color: 'var(--warning)' }}>
-        ≠ {different}
-      </span>
-      <button
-        className="btn btn-danger"
-        style={{ padding: '2px 8px', fontSize: 10, marginLeft: 'auto' }}
-        onClick={async () => {
-          try { await api.stopCompare(); } catch { /* ignore */ }
-          fetchCompareStatus();
-        }}
-      >
-        <Square size={10} />
-        Stop
-      </button>
+      {runningJobs.map(job => (
+        <span key={job.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          {runningJobs.length > 1 && job.project_name && (
+            <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{job.project_name}:</span>
+          )}
+          <span style={{ color: 'var(--text-secondary)' }}>
+            {job.processed_files}/{job.total_files} ({job.progress?.toFixed(1)}%)
+          </span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>ETA {job.eta}</span>
+          <button
+            className="btn btn-danger"
+            style={{ padding: '1px 6px', fontSize: 9 }}
+            onClick={async () => {
+              try {
+                await fetch('/api/v1/compare/stop', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ project_id: job.id }),
+                });
+              } catch { /* ignore */ }
+            }}
+          >
+            <Square size={8} />
+          </button>
+        </span>
+      ))}
     </div>
   );
 }

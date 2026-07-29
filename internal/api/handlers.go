@@ -21,6 +21,8 @@ type TemplateMapResult struct {
 
 // CompareRequest is the body for POST /api/v1/compare
 type CompareRequest struct {
+	ProjectID      string `json:"project_id"`
+	ProjectName    string `json:"project_name"`
 	SearchFolder   string `json:"search_folder"`
 	TemplateFolder string `json:"template_folder"`
 	OutputFolder   string `json:"output_folder"`
@@ -31,10 +33,12 @@ type CompareRequest struct {
 
 // handleHealth returns server health
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	running := s.jobs.RunningJobs()
 	JSONResponse(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"version":  "v0.4.0",
-		"running":  s.compareState.Running,
+		"status":         "ok",
+		"version":        "v0.6.0",
+		"running":        len(running) > 0,
+		"running_jobs":   len(running),
 	})
 }
 
@@ -85,11 +89,8 @@ func (s *Server) handleScanTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build template map
 	templateMap := compare.BuildTemplateMap(req.TemplateFolder, req.Recursive, nil)
-
 	s.settings.TemplateFolder = req.TemplateFolder
-	s.compareState.TemplateMap = templateMap
 
 	JSONResponse(w, http.StatusOK, TemplateMapResult{
 		Count:   len(templateMap),
@@ -97,32 +98,19 @@ func (s *Server) handleScanTemplates(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetTemplates returns the current template map
+// handleGetTemplates returns the current template map (from settings-level scan)
 func (s *Server) handleGetTemplates(w http.ResponseWriter, r *http.Request) {
-	if s.compareState.TemplateMap == nil {
-		JSONResponse(w, http.StatusOK, TemplateMapResult{Count: 0, Mapping: make(map[string]string)})
-		return
-	}
+	// Return count from settings — actual template map is per-job now
 	JSONResponse(w, http.StatusOK, TemplateMapResult{
-		Count:   len(s.compareState.TemplateMap),
-		Mapping: s.compareState.TemplateMap,
+		Count:   0,
+		Mapping: make(map[string]string),
 	})
 }
 
-// handleCompare starts a comparison run
+// handleCompare starts a comparison job (supports parallel jobs by project ID)
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	if s.compareState.Running {
-		ErrorResponse(w, http.StatusConflict, "comparison already running")
-		return
-	}
-
-	if s.compareState.TemplateMap == nil || len(s.compareState.TemplateMap) == 0 {
-		ErrorResponse(w, http.StatusBadRequest, "no template map — scan templates first")
 		return
 	}
 
@@ -155,103 +143,99 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	}
 	os.MkdirAll(outputFolder, 0755)
 
-	// If template_folder provided in request, update settings and re-scan
-	if req.TemplateFolder != "" {
-		s.settings.TemplateFolder = req.TemplateFolder
-		s.settings.SearchFolder = searchFolder
-		s.settings.OutputFolder = outputFolder
-		// Re-scan templates from the provided folder
-		templateMap := compare.BuildTemplateMap(req.TemplateFolder, req.Recursive, nil)
-		s.compareState.TemplateMap = templateMap
+	templateFolder := req.TemplateFolder
+	if templateFolder == "" {
+		templateFolder = s.settings.TemplateFolder
+	}
+	if templateFolder == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_folder is required")
+		return
 	}
 
-	// Set running state BEFORE starting goroutine to avoid race condition
-	s.compareState.Running = true
-	s.compareState.ProcessedFiles = 0
-	s.compareState.TotalFiles = 0
-	s.compareState.LogMessages = []string{}
+	// Determine job ID — use project_id if provided, else generate from folders
+	jobID := req.ProjectID
+	if jobID == "" {
+		jobID = fmt.Sprintf("job_%d", time.Now().Unix())
+	}
 
-	// Create stop channel
-	s.stopChan = make(chan struct{}, 1)
+	// Check if this job is already running
+	existing := s.jobs.GetExisting(jobID)
+	if existing != nil && existing.Running {
+		ErrorResponse(w, http.StatusConflict, "comparison already running for this project")
+		return
+	}
+
+	// Build template map
+	templateMap := compare.BuildTemplateMap(templateFolder, req.Recursive, nil)
+	if len(templateMap) == 0 {
+		ErrorResponse(w, http.StatusBadRequest, "no templates found in template folder")
+		return
+	}
+
+	// Create/reset the job
+	job := s.jobs.Get(jobID)
+	job.mu.Lock()
+	job.Running = true
+	job.ProcessedFiles = 0
+	job.TotalFiles = 0
+	job.LogMessages = []string{}
+	job.StartTime = time.Now()
+	job.Matched = 0
+	job.Different = 0
+	job.NoTemplate = 0
+	job.TemplateMap = templateMap
+	job.SearchFolder = searchFolder
+	job.OutputFolder = outputFolder
+	job.TemplateFolder = templateFolder
+	job.ProjectName = req.ProjectName
+	job.StopChan = make(chan struct{}, 1)
+	job.mu.Unlock()
 
 	// Start comparison in background
-	go s.runComparison(searchFolder, outputFolder, req, nil)
+	go s.runComparisonJob(job, req)
 
 	JSONResponse(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"message": "comparison started",
-		"output":  outputFolder,
+		"ok":       true,
+		"message":  "comparison started",
+		"output":   outputFolder,
+		"job_id":   jobID,
 	})
 }
 
-// runComparison runs the comparison in a background goroutine
-// skipFiles is a set of filenames to skip (for resume — already processed)
-func (s *Server) runComparison(searchFolder, outputFolder string, req CompareRequest, skipFiles map[string]bool) {
-	mu := sync.Mutex{}
-
+// runComparisonJob runs a single comparison job in a background goroutine
+func (s *Server) runComparisonJob(job *CompareJob, req CompareRequest) {
 	startTime := time.Now()
-	s.compareState.Running = true
-	s.compareState.ProcessedFiles = 0
-	s.compareState.LogMessages = []string{}
-	s.compareState.StartTime = startTime
-	s.compareState.Matched = 0
-	s.compareState.Different = 0
-	s.compareState.NoTemplate = 0
 
-	// Save session state
-	session := &SessionState{
-		ProjectID:      "",
-		SearchFolder:   searchFolder,
-		OutputFolder:   outputFolder,
-		TemplateFolder: s.settings.TemplateFolder,
-		Recursive:      req.Recursive,
-		MoveFiles:      req.MoveFiles,
-		GroupByContent: req.GroupByContent,
-		StartTime:      startTime,
-		Status:         "running",
-	}
-	s.session = session
-	s.SaveSession(session)
+	job.mu.Lock()
+	job.StartTime = startTime
+	job.LogMessages = []string{}
+	job.mu.Unlock()
 
 	logFn := func(msg string) {
-		mu.Lock()
-		s.compareState.LogMessages = append(s.compareState.LogMessages, msg)
-		// Keep last 500 messages
-		if len(s.compareState.LogMessages) > 500 {
-			s.compareState.LogMessages = s.compareState.LogMessages[len(s.compareState.LogMessages)-500:]
-		}
-		mu.Unlock()
+		job.AddLog(msg)
 	}
 
-	// Progress function with stop check and timing updates
 	progressFn := func(done, total int) bool {
-		mu.Lock()
-		s.compareState.TotalFiles = total
-		s.compareState.ProcessedFiles = done
-		// Update timing
+		job.mu.Lock()
+		job.TotalFiles = total
+		job.ProcessedFiles = done
 		elapsed := time.Since(startTime)
-		s.compareState.ElapsedTime = formatDuration(elapsed)
+		job.ElapsedTime = formatDuration(elapsed)
 		if done > 0 && total > 0 {
 			perFile := elapsed / time.Duration(done)
 			remaining := total - done
-			s.compareState.ETA = formatDuration(perFile * time.Duration(remaining))
+			job.ETA = formatDuration(perFile * time.Duration(remaining))
 		}
-		// Update session
-		session.TotalFiles = total
-		session.ProcessedFiles = done
-		session.Matched = s.compareState.Matched
-		session.Different = s.compareState.Different
-		session.NoTemplate = s.compareState.NoTemplate
-		mu.Unlock()
+		job.mu.Unlock()
 
-		// Save session periodically (every 10 files)
+		// Save session periodically
 		if done%10 == 0 {
-			s.SaveSession(session)
+			SaveJobSession(job)
 		}
 
 		// Check stop channel
 		select {
-		case <-s.stopChan:
+		case <-job.StopChan:
 			logFn("=== Comparison stopped by user ===")
 			return false
 		default:
@@ -259,29 +243,24 @@ func (s *Server) runComparison(searchFolder, outputFolder string, req CompareReq
 		}
 	}
 
-	// Custom wrapper to count results and track processed files for resume
-	wrappedProgressFn := func(done, total int) bool {
-		return progressFn(done, total)
-	}
-
 	results := compare.RunComparison(
-		s.compareState.TemplateMap,
-		searchFolder,
-		outputFolder,
+		job.TemplateMap,
+		job.SearchFolder,
+		job.OutputFolder,
 		req.Recursive,
 		req.MoveFiles,
 		req.GroupByContent,
-		wrappedProgressFn,
+		progressFn,
 		logFn,
 	)
 
-	s.compareState.Results = make([]any, len(results))
+	job.mu.Lock()
+	job.Results = make([]any, len(results))
 	for i, r := range results {
-		s.compareState.Results[i] = r
+		job.Results[i] = r
 	}
-	s.compareState.Running = false
+	job.Running = false
 
-	// Count results
 	matched := 0
 	different := 0
 	noTemplate := 0
@@ -295,39 +274,52 @@ func (s *Server) runComparison(searchFolder, outputFolder string, req CompareReq
 			noTemplate++
 		}
 	}
-	s.compareState.Matched = matched
-	s.compareState.Different = different
-	s.compareState.NoTemplate = noTemplate
+	job.Matched = matched
+	job.Different = different
+	job.NoTemplate = noTemplate
 
-	// Final timing
 	elapsed := time.Since(startTime)
-	s.compareState.ElapsedTime = formatDuration(elapsed)
-	s.compareState.ETA = "00:00:00"
+	job.ElapsedTime = formatDuration(elapsed)
+	job.ETA = "00:00:00"
+	job.mu.Unlock()
 
 	logFn(fmt.Sprintf("=== SUMMARY: %d matched, %d different, %d no template ===", matched, different, noTemplate))
 	logFn(fmt.Sprintf("=== Total time: %s ===", formatDuration(elapsed)))
 
-	// Update session as completed
-	session.Status = "completed"
-	session.EndTime = time.Now()
-	session.Matched = matched
-	session.Different = different
-	session.NoTemplate = noTemplate
-	s.SaveSession(session)
+	SaveJobSession(job)
 }
 
-// handleCompareStop stops the running comparison
+// handleCompareStop stops a comparison job (by project_id or the first running job)
 func (s *Server) handleCompareStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	if !s.compareState.Running {
-		ErrorResponse(w, http.StatusBadRequest, "no comparison running")
+
+	var req struct {
+		ProjectID string `json:"project_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	jobID := req.ProjectID
+	if jobID == "" {
+		// Stop first running job
+		running := s.jobs.RunningJobs()
+		if len(running) == 0 {
+			ErrorResponse(w, http.StatusBadRequest, "no comparison running")
+			return
+		}
+		jobID = running[0].ID
+	}
+
+	job := s.jobs.GetExisting(jobID)
+	if job == nil || !job.Running {
+		ErrorResponse(w, http.StatusBadRequest, "no comparison running for this project")
 		return
 	}
+
 	select {
-	case s.stopChan <- struct{}{}:
+	case job.StopChan <- struct{}{}:
 	default:
 	}
 	JSONResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "stop signal sent"})
@@ -339,15 +331,35 @@ func (s *Server) handleCompareResume(w http.ResponseWriter, r *http.Request) {
 		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	if s.compareState.Running {
-		ErrorResponse(w, http.StatusConflict, "comparison already running")
+
+	var req struct {
+		ProjectID string `json:"project_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	jobID := req.ProjectID
+	if jobID == "" {
+		// Fallback: find any stopped job with a session
+		ErrorResponse(w, http.StatusBadRequest, "project_id is required for resume")
 		return
 	}
 
-	// Load saved session
-	sess, err := LoadSession()
-	if err != nil || sess == nil {
-		ErrorResponse(w, http.StatusBadRequest, "no saved session to resume")
+	job := s.jobs.GetExisting(jobID)
+	if job != nil && job.Running {
+		ErrorResponse(w, http.StatusConflict, "comparison already running for this project")
+		return
+	}
+
+	// Load saved session for this job
+	sessPath := jobSessionPath(jobID)
+	sessData, err := os.ReadFile(sessPath)
+	if err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "no saved session for this project")
+		return
+	}
+	var sess SessionState
+	if err := json.Unmarshal(sessData, &sess); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "failed to load session")
 		return
 	}
 	if sess.Status == "completed" {
@@ -356,31 +368,182 @@ func (s *Server) handleCompareResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Re-scan templates
-	if s.settings.TemplateFolder == "" {
-		s.settings.TemplateFolder = sess.TemplateFolder
-	}
-	templateMap := compare.BuildTemplateMap(s.settings.TemplateFolder, sess.Recursive, nil)
+	templateMap := compare.BuildTemplateMap(sess.TemplateFolder, sess.Recursive, nil)
 	if len(templateMap) == 0 {
 		ErrorResponse(w, http.StatusBadRequest, "no templates found — cannot resume")
 		return
 	}
-	s.compareState.TemplateMap = templateMap
 
-	// Build skip list from already-processed files in output
+	// Build skip list
 	skipFiles := buildSkipList(sess.OutputFolder)
 
-	s.stopChan = make(chan struct{}, 1)
-	go s.runComparison(sess.SearchFolder, sess.OutputFolder, CompareRequest{
+	job = s.jobs.Get(jobID)
+	job.mu.Lock()
+	job.Running = true
+	job.TemplateMap = templateMap
+	job.SearchFolder = sess.SearchFolder
+	job.OutputFolder = sess.OutputFolder
+	job.TemplateFolder = sess.TemplateFolder
+	job.StopChan = make(chan struct{}, 1)
+	job.mu.Unlock()
+
+	go s.runComparisonJob(job, CompareRequest{
 		SearchFolder:   sess.SearchFolder,
 		Recursive:      sess.Recursive,
 		MoveFiles:      sess.MoveFiles,
 		GroupByContent: sess.GroupByContent,
-	}, skipFiles)
+	})
 
 	JSONResponse(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"message": "comparison resumed",
 		"skipped": len(skipFiles),
+		"job_id":  jobID,
+	})
+}
+
+// handleAllJobs returns all running comparison jobs (for global status bar)
+func (s *Server) handleAllJobs(w http.ResponseWriter, r *http.Request) {
+	jobs := s.jobs.All()
+	type JobSummary struct {
+		ID             string `json:"id"`
+		ProjectName    string `json:"project_name"`
+		Running        bool   `json:"running"`
+		TotalFiles     int    `json:"total_files"`
+		ProcessedFiles int    `json:"processed_files"`
+		Progress       float64 `json:"progress"`
+		ElapsedTime    string `json:"elapsed_time"`
+		ETA            string `json:"eta"`
+		Matched        int    `json:"matched"`
+		Different      int    `json:"different"`
+		NoTemplate     int    `json:"no_template"`
+	}
+
+	summaries := make([]JobSummary, 0, len(jobs))
+	for _, j := range jobs {
+		j.mu.Lock()
+		progress := 0.0
+		if j.TotalFiles > 0 {
+			progress = float64(j.ProcessedFiles) / float64(j.TotalFiles) * 100
+		}
+		summaries = append(summaries, JobSummary{
+			ID:             j.ID,
+			ProjectName:    j.ProjectName,
+			Running:        j.Running,
+			TotalFiles:     j.TotalFiles,
+			ProcessedFiles: j.ProcessedFiles,
+			Progress:       progress,
+			ElapsedTime:    j.ElapsedTime,
+			ETA:            j.ETA,
+			Matched:        j.Matched,
+			Different:      j.Different,
+			NoTemplate:     j.NoTemplate,
+		})
+		j.mu.Unlock()
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"jobs":     summaries,
+		"count":    len(summaries),
+		"running":  len(s.jobs.RunningJobs()),
+	})
+}
+
+// handleCompareStatus returns status for a specific job (by project_id) or the first running job
+func (s *Server) handleCompareStatus(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("project_id")
+
+	var job *CompareJob
+	if projectID != "" {
+		job = s.jobs.GetExisting(projectID)
+	}
+	if job == nil {
+		// Fallback: return first running job, or first job overall
+		running := s.jobs.RunningJobs()
+		if len(running) > 0 {
+			job = running[0]
+		} else {
+			all := s.jobs.All()
+			if len(all) > 0 {
+				job = all[0]
+			}
+		}
+	}
+
+	if job == nil {
+		JSONResponse(w, http.StatusOK, map[string]any{
+			"running":          false,
+			"total_files":      0,
+			"processed_files":  0,
+			"progress":          0,
+			"log_count":         0,
+			"recent_logs":       []string{},
+			"results_count":     0,
+			"elapsed_time":      "",
+			"eta":               "",
+			"matched":           0,
+			"different":         0,
+			"no_template":       0,
+		})
+		return
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	progress := 0.0
+	if job.TotalFiles > 0 {
+		progress = float64(job.ProcessedFiles) / float64(job.TotalFiles) * 100
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"running":          job.Running,
+		"total_files":      job.TotalFiles,
+		"processed_files":  job.ProcessedFiles,
+		"progress":          progress,
+		"log_count":         len(job.LogMessages),
+		"recent_logs":       getRecentLogs(job.LogMessages, 50),
+		"results_count":     len(job.Results),
+		"elapsed_time":      job.ElapsedTime,
+		"eta":               job.ETA,
+		"matched":           job.Matched,
+		"different":         job.Different,
+		"no_template":       job.NoTemplate,
+		"job_id":            job.ID,
+		"project_name":      job.ProjectName,
+	})
+}
+
+// handleResults returns results for a specific job or first available
+func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("project_id")
+
+	var job *CompareJob
+	if projectID != "" {
+		job = s.jobs.GetExisting(projectID)
+	}
+	if job == nil {
+		running := s.jobs.RunningJobs()
+		if len(running) > 0 {
+			job = running[0]
+		} else {
+			all := s.jobs.All()
+			if len(all) > 0 {
+				job = all[0]
+			}
+		}
+	}
+
+	if job == nil {
+		JSONResponse(w, http.StatusOK, map[string]any{"results": []any{}, "count": 0})
+		return
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"results": job.Results,
+		"count":   len(job.Results),
 	})
 }
 
@@ -393,7 +556,6 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			JSONResponse(w, http.StatusOK, map[string]any{"session": nil})
 			return
 		}
-		// Add live timing
 		elapsed := sess.ElapsedTime()
 		eta := sess.ETA()
 		JSONResponse(w, http.StatusOK, map[string]any{
@@ -404,14 +566,6 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		ClearSession()
 		s.session = nil
-		s.compareState.StartTime = time.Time{}
-		s.compareState.ElapsedTime = ""
-		s.compareState.ETA = ""
-		s.compareState.Matched = 0
-		s.compareState.Different = 0
-		s.compareState.NoTemplate = 0
-		s.compareState.Results = nil
-		s.compareState.LogMessages = []string{}
 		JSONResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "session cleared"})
 	default:
 		ErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -430,32 +584,6 @@ func buildSkipList(outputFolder string) map[string]bool {
 	return skip
 }
 
-// handleCompareStatus returns the current comparison progress
-func (s *Server) handleCompareStatus(w http.ResponseWriter, r *http.Request) {
-	JSONResponse(w, http.StatusOK, map[string]any{
-		"running":          s.compareState.Running,
-		"total_files":     s.compareState.TotalFiles,
-		"processed_files": s.compareState.ProcessedFiles,
-		"progress":        progressPercent(s.compareState.ProcessedFiles, s.compareState.TotalFiles),
-		"log_count":       len(s.compareState.LogMessages),
-		"recent_logs":     getRecentLogs(s.compareState.LogMessages, 50),
-		"results_count":   len(s.compareState.Results),
-		"elapsed_time":    s.compareState.ElapsedTime,
-		"eta":             s.compareState.ETA,
-		"matched":         s.compareState.Matched,
-		"different":       s.compareState.Different,
-		"no_template":     s.compareState.NoTemplate,
-	})
-}
-
-// handleResults returns the comparison results
-func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
-	JSONResponse(w, http.StatusOK, map[string]any{
-		"results": s.compareState.Results,
-		"count":   len(s.compareState.Results),
-	})
-}
-
 // progressPercent calculates percentage
 func progressPercent(done, total int) float64 {
 	if total == 0 {
@@ -471,3 +599,6 @@ func getRecentLogs(logs []string, n int) []string {
 	}
 	return logs[len(logs)-n:]
 }
+
+// formatDuration is imported from session.go
+var _ = sync.Mutex{}

@@ -123,6 +123,8 @@ export default function Compare() {
         group_by_content: groupByContent,
         template_folder: templateFolder,
         output_folder: outputFolder,
+        project_id: activeProject?.id,
+        project_name: activeProject?.name,
       } as any);
       setSuccessMsg(result.message || 'Comparison started');
       setHasSession(true);
