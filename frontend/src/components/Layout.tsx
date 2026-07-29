@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, Wrench, Loader2, Square } from 'lucide-react';
+import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, Loader2, Square } from 'lucide-react';
 
 export default function Layout() {
   const tabStyle = (isActive: boolean): React.CSSProperties => ({
@@ -59,11 +59,6 @@ export default function Layout() {
         <NavLink to="/browse" style={({ isActive }) => tabStyle(isActive)}>
           <FolderTree size={14} />
           Browse
-        </NavLink>
-
-        <NavLink to="/edit" style={({ isActive }) => tabStyle(isActive)}>
-          <Wrench size={14} />
-          Edit
         </NavLink>
 
         <NavLink to="/settings" style={({ isActive }) => tabStyle(isActive)}>

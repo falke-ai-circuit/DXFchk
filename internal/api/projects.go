@@ -147,6 +147,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 		store.Projects[id] = project
 		store.ActiveID = id
+		s.settings.ActiveProjectID = id
 		store.save()
 
 		JSONResponse(w, http.StatusOK, map[string]any{
@@ -190,6 +191,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		s.settings.Recursive = project.Recursive
 		s.settings.GroupByContent = project.GroupByContent
 		s.settings.MoveFiles = project.MoveFiles
+		s.settings.ActiveProjectID = projectID
 
 		JSONResponse(w, http.StatusOK, map[string]any{
 			"project": project,

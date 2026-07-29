@@ -38,6 +38,7 @@ type Settings struct {
 	AutoCreateMod     bool   `json:"auto_create_mod_templates"`
 	AutoApplyToGroup  bool   `json:"auto_apply_to_group"`
 	ExternalEditorPath string `json:"external_editor_path"` // path to CAD editor exe, empty = use Windows default
+	ActiveProjectID   string `json:"active_project_id"`     // ID of the active project (for template folder lookup)
 }
 
 // CompareState holds the current comparison state

@@ -290,9 +290,17 @@ func (s *Server) handleApplyTemplate(w http.ResponseWriter, r *http.Request) {
 	fixedTemplateTarget := filepath.Join(templateDir, req.GroupName+".dxf")
 	copyFileData(req.TemplatePath, fixedTemplateTarget)
 
-	// Also copy the fixed template to the project's template folder if we know it
-	if s.settings.TemplateFolder != "" {
-		projectTemplateTarget := filepath.Join(s.settings.TemplateFolder, req.GroupName+".dxf")
+	// Also copy the fixed template to the project's template folder
+	// Use active project's template_folder if global settings don't have one
+	templateFolder := s.settings.TemplateFolder
+	if templateFolder == "" && s.settings.ActiveProjectID != "" {
+		store := loadProjects()
+		if proj, exists := store.Projects[s.settings.ActiveProjectID]; exists {
+			templateFolder = proj.TemplateFolder
+		}
+	}
+	if templateFolder != "" {
+		projectTemplateTarget := filepath.Join(templateFolder, req.GroupName+".dxf")
 		copyFileData(req.TemplatePath, projectTemplateTarget)
 	}
 
