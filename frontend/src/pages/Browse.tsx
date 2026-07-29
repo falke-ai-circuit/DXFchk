@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderTree, Folder, FileText, ChevronRight, ChevronDown,
-  RefreshCw, Loader2, GitCompare, Plus, AlertCircle,
+  RefreshCw, Loader2, GitCompare, Plus, AlertCircle, Wrench, Layers,
 } from 'lucide-react';
 import { useStore } from '../store';
-import { api, type TreeNode, type DiffResponse, type DiffEntity } from '../api';
+import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup } from '../api';
 
 export default function Browse() {
   const { activeProject } = useStore();
@@ -16,6 +16,10 @@ export default function Browse() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [templatePath, setTemplatePath] = useState<string | null>(null);
   const [createTemplateMsg, setCreateTemplateMsg] = useState<string | null>(null);
+  const [showGroups, setShowGroups] = useState(false);
+  const [groups, setGroups] = useState<TemplateGroup[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -37,6 +41,17 @@ export default function Browse() {
     loadTree();
   }, [loadTree]);
 
+  const loadGroups = async () => {
+    if (!outputFolder) return;
+    setGroupsLoading(true);
+    try {
+      const resp = await api.getTemplateGroups(outputFolder);
+      setGroups(resp.groups);
+      setShowGroups(true);
+    } catch { /* ignore */ }
+    setGroupsLoading(false);
+  };
+
   // Find template file for a given module file
   const findTemplateForFile = async (filePath: string) => {
     if (!activeProject?.template_folder) return null;
@@ -56,6 +71,7 @@ export default function Browse() {
     setSelectedFile(filePath);
     setDiff(null);
     setCreateTemplateMsg(null);
+    setApplyMsg(null);
 
     // Try to find corresponding template
     const tmpl = await findTemplateForFile(filePath);
@@ -67,7 +83,6 @@ export default function Browse() {
         const d = await api.diff(tmpl, filePath);
         setDiff(d);
       } catch (err) {
-        // Diff failed — maybe files too different or parse error
         console.error('Diff failed:', err);
       }
       setDiffLoading(false);
@@ -82,6 +97,22 @@ export default function Browse() {
       setCreateTemplateMsg(`✓ Template created: ${resp.name}`);
     } catch (err) {
       setCreateTemplateMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  };
+
+  const handleApplyTemplate = async (groupName: string, fixedFilePath: string) => {
+    setApplyMsg(`Applying fixed template to group ${groupName}...`);
+    try {
+      const resp = await api.applyTemplate({
+        template_path: fixedFilePath,
+        group_name: groupName,
+        output_folder: outputFolder,
+      });
+      setApplyMsg(`✓ ${resp.message} (${resp.total_files} files affected)`);
+      // Reload tree
+      loadTree();
+    } catch (err) {
+      setApplyMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   };
 
@@ -122,10 +153,41 @@ export default function Browse() {
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <FolderTree size={16} color="var(--accent)" />
           <span style={{ fontSize: '13px', fontWeight: 600 }}>Output Structure</span>
-          <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 8px' }} onClick={loadTree}>
+          <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 8px' }} onClick={loadTree} title="Refresh">
             <RefreshCw size={14} />
           </button>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={loadGroups} title="Template Groups">
+            {groupsLoading ? <Loader2 size={14} className="spin" /> : <Layers size={14} />}
+          </button>
         </div>
+
+        {/* Template Groups Panel */}
+        {showGroups && groups.length > 0 && (
+          <div style={{ maxHeight: '300px', overflowY: 'auto', borderBottom: '2px solid var(--border)', backgroundColor: 'var(--bg-elevated)' }}>
+            <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Wrench size={12} color="var(--warning)" />
+              Template Groups — Fix & Apply
+              <span style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>{groups.length} groups</span>
+            </div>
+            {groups.map(g => (
+              <div key={g.template_name} style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', fontSize: '11px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{g.template_name}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{g.total_files} files</span>
+                  {g.matched_count > 0 && <span style={{ color: 'var(--success)' }}>✓{g.matched_count}</span>}
+                  {g.mod_folders.length > 0 && <span style={{ color: 'var(--warning)' }}>mod:{g.mod_folders.length}</span>}
+                </div>
+                {g.mod_folders.map(mod => (
+                  <div key={mod.folder_name} style={{ marginLeft: '12px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{mod.folder_name}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>({mod.file_count})</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           <TreeView node={tree} level={0} selectedFile={selectedFile} onFileClick={handleFileClick} />
         </div>
@@ -151,6 +213,20 @@ export default function Browse() {
                   Create Template from this file
                 </button>
               )}
+              {selectedFile && selectedFile.includes('_mod') && (
+                <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '4px 12px', fontSize: 11 }} onClick={() => {
+                  // Extract group name from folder path
+                  const parts = selectedFile.split('\\');
+                  const modFolder = parts.find(p => p.includes('_mod'));
+                  if (modFolder) {
+                    const groupName = modFolder.split('_mod')[0];
+                    handleApplyTemplate(groupName, selectedFile);
+                  }
+                }}>
+                  <Wrench size={12} />
+                  Apply as Fixed Template to Group
+                </button>
+              )}
             </div>
 
             {/* Diff Summary Bar */}
@@ -167,6 +243,13 @@ export default function Browse() {
             {createTemplateMsg && (
               <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--accent)' }}>
                 {createTemplateMsg}
+              </div>
+            )}
+
+            {/* Apply template message */}
+            {applyMsg && (
+              <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--accent)' }}>
+                {applyMsg}
               </div>
             )}
 
@@ -201,12 +284,14 @@ export default function Browse() {
                   </p>
                   <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '16px' }}>
                     This file is in a _modN folder, meaning it differs from the template.
-                    You can create a new template from this file.
+                    You can create a new template from this file, or apply it as a fixed template to the entire group.
                   </p>
-                  <button className="btn btn-primary" onClick={handleCreateTemplate}>
-                    <Plus size={14} />
-                    Create Template from this file
-                  </button>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button className="btn btn-primary" onClick={handleCreateTemplate}>
+                      <Plus size={14} />
+                      Create Template from this file
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -222,6 +307,10 @@ export default function Browse() {
             <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>
               Template vs module comparison with highlighted differences.
             </p>
+            <button className="btn btn-secondary" style={{ marginTop: '16px' }} onClick={loadGroups}>
+              <Layers size={14} />
+              View Template Groups
+            </button>
           </div>
         )}
       </div>
@@ -242,7 +331,6 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
   const isLog = !node.is_dir && node.name.toLowerCase().endsWith('.log');
 
   if (!node.is_dir) {
-    // File node
     return (
       <div
         onClick={() => isDXF && onFileClick(node.path, '')}
@@ -269,7 +357,6 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
     );
   }
 
-  // Directory node
   return (
     <div>
       <div
@@ -327,22 +414,19 @@ function DXFCanvas({ entities, added, removed, bbox, highlightDiffs }: {
   const bw = maxX - minX || 100;
   const bh = maxY - minY || 100;
 
-  // Scale to fit canvas with padding
   const padding = 40;
   const scale = Math.min((size.w - padding * 2) / bw, (size.h - padding * 2) / bh);
   const offsetX = (size.w - bw * scale) / 2 - minX * scale;
-  const offsetY = (size.h - bh * scale) / 2 + maxY * scale; // flip Y
+  const offsetY = (size.h - bh * scale) / 2 + maxY * scale;
 
   const tx = (x: number) => x * scale + offsetX;
-  const ty = (y: number) => -y * scale + offsetY; // flip Y for DXF coordinate system
+  const ty = (y: number) => -y * scale + offsetY;
 
-  // Build added entity lookup set
   const addedSet = new Set(added.map(e => entityKey(e)));
 
   return (
     <div ref={containerRef} style={{ flex: 1, overflow: 'hidden', position: 'relative', backgroundColor: 'var(--bg-primary)' }}>
       <svg width={size.w} height={size.h} style={{ display: 'block' }}>
-        {/* Grid lines (light) */}
         <defs>
           <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
             <path d="M 20 0 L 0 0 0 20" fill="none" stroke="var(--border)" strokeWidth="0.5" />
@@ -350,7 +434,6 @@ function DXFCanvas({ entities, added, removed, bbox, highlightDiffs }: {
         </defs>
         <rect width={size.w} height={size.h} fill="url(#grid)" opacity="0.3" />
 
-        {/* Render entities */}
         {entities.map((e, i) => {
           const isAdded = highlightDiffs && addedSet.has(entityKey(e));
           const stroke = isAdded ? 'var(--error)' : 'var(--accent)';
@@ -397,7 +480,6 @@ function DXFCanvas({ entities, added, removed, bbox, highlightDiffs }: {
           }
         })}
 
-        {/* Render removed entities (only on template side) */}
         {removed.map((e, i) => {
           const stroke = 'var(--warning)';
           switch (e.type) {
@@ -429,7 +511,6 @@ function DXFCanvas({ entities, added, removed, bbox, highlightDiffs }: {
   );
 }
 
-// DiffCircle draws a red circle highlight around a difference
 function DiffCircle({ cx, cy }: { cx: number; cy: number }) {
   return (
     <g>
@@ -441,13 +522,11 @@ function DiffCircle({ cx, cy }: { cx: number; cy: number }) {
   );
 }
 
-// Helper: entity key for matching
 function entityKey(e: DiffEntity): string {
   const coords = e.coords.map(c => c.toFixed(2)).join(',');
   return `${e.type}:${e.block_name}:${coords}`;
 }
 
-// Helper: format file size
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

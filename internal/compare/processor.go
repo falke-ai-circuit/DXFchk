@@ -413,6 +413,17 @@ func (c *ComparisonProcessor) handleDifferentFile(dxfFile, templatePath, templat
 	templateDir := filepath.Join(c.OutputFolder, safeName)
 	os.MkdirAll(templateDir, 0755)
 	tempTargetPath := filepath.Join(templateDir, fileName)
+	// Push diff summary to live log (matches Python lines 373-374)
+	if len(onlyIn1B) > 0 || len(onlyIn2B) > 0 || len(diffB) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in blocks: %d block type(s) with differences", len(onlyIn1B)+len(onlyIn2B)+len(diffB)))
+	}
+	if len(onlyIn1L) > 0 || len(onlyIn2L) > 0 || len(diffL) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in lines: %d layer(s) with differences", len(onlyIn1L)+len(onlyIn2L)+len(diffL)))
+	}
+	if len(onlyIn1P) > 0 || len(onlyIn2P) > 0 || len(diffP) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in polylines: %d layer(s) with differences", len(onlyIn1P)+len(onlyIn2P)+len(diffP)))
+	}
+
 	c.log(fmt.Sprintf("  -> DIFFERENT: %s has differences from template", fileName))
 	copyFile(dxfFile, tempTargetPath, c.log)
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/compare"
 )
@@ -22,6 +23,8 @@ type Server struct {
 	// Application state
 	settings      *Settings
 	compareState  *CompareState
+	session       *SessionState
+	stopChan      chan struct{}
 }
 
 // Settings holds the application settings
@@ -42,6 +45,12 @@ type CompareState struct {
 	LogMessages    []string           `json:"log_messages"`
 	Results        []any              `json:"results"`
 	TemplateMap    compare.TemplateMap `json:"-"`
+	StartTime      time.Time          `json:"start_time"`
+	ElapsedTime    string             `json:"elapsed_time"`
+	ETA            string             `json:"eta"`
+	Matched        int                `json:"matched"`
+	Different      int                `json:"different"`
+	NoTemplate     int                `json:"no_template"`
 }
 
 // NewServer creates a new API server
@@ -88,6 +97,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/browse/folder", s.handleBrowseFolder)
 	s.mux.HandleFunc("POST /api/v1/diff", s.handleDXFDiff)
 	s.mux.HandleFunc("POST /api/v1/template/create", s.handleCreateTemplate)
+	s.mux.HandleFunc("POST /api/v1/compare/stop", s.handleCompareStop)
+	s.mux.HandleFunc("POST /api/v1/compare/resume", s.handleCompareResume)
+	s.mux.HandleFunc("GET /api/v1/session", s.handleSession)
+	s.mux.HandleFunc("DELETE /api/v1/session", s.handleSession)
+	s.mux.HandleFunc("POST /api/v1/project/import", s.handleProjectImport)
+	s.mux.HandleFunc("GET /api/v1/project/export", s.handleProjectExport)
+	s.mux.HandleFunc("POST /api/v1/template/apply", s.handleApplyTemplate)
+	s.mux.HandleFunc("GET /api/v1/template/groups", s.handleTemplateGroups)
 }
 
 // ServeHTTP implements http.Handler

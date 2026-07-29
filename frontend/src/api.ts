@@ -74,6 +74,11 @@ export interface CompareStatus {
   log_count: number;
   recent_logs: string[];
   results_count: number;
+  elapsed_time: string;
+  eta: string;
+  matched: number;
+  different: number;
+  no_template: number;
 }
 
 export interface ComparisonResult {
@@ -105,6 +110,40 @@ export interface TreeNode {
 export interface BrowseResponse {
   tree: TreeNode | null;
   empty: boolean;
+}
+
+export interface SessionData {
+  project_id: string;
+  search_folder: string;
+  output_folder: string;
+  template_folder: string;
+  recursive: boolean;
+  move_files: boolean;
+  group_by_content: boolean;
+  start_time: string;
+  end_time?: string;
+  total_files: number;
+  processed_files: number;
+  matched: number;
+  different: number;
+  no_template: number;
+  status: string;
+  paused: boolean;
+}
+
+export interface ModGroup {
+  folder_name: string;
+  folder_path: string;
+  file_count: number;
+  files: string[];
+}
+
+export interface TemplateGroup {
+  template_name: string;
+  template_path: string;
+  mod_folders: ModGroup[];
+  matched_count: number;
+  total_files: number;
 }
 
 export interface DiffEntity {
@@ -216,5 +255,45 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source_file: sourceFile, template_folder: templateFolder, template_name: templateName }),
+    }),
+
+  // Stop comparison
+  stopCompare: () =>
+    apiFetch<{ ok: boolean; message: string }>('/api/v1/compare/stop', {
+      method: 'POST',
+    }),
+
+  // Resume comparison
+  resumeCompare: () =>
+    apiFetch<{ ok: boolean; message: string; skipped: number }>('/api/v1/compare/resume', {
+      method: 'POST',
+    }),
+
+  // Session
+  getSession: () =>
+    apiFetch<{ session: SessionData | null; elapsed_time: string; eta: string }>('/api/v1/session'),
+  clearSession: () =>
+    apiFetch<{ ok: boolean; message: string }>('/api/v1/session', {
+      method: 'DELETE',
+    }),
+
+  // Project import/export
+  exportProject: (id: string) =>
+    apiFetch<Project>(`/api/v1/project/export?id=${encodeURIComponent(id)}`),
+  importProject: (project: Project, mode?: string) =>
+    apiFetch<{ ok: boolean; project: Project }>(`/api/v1/project/import${mode ? `?mode=${mode}` : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+    }),
+
+  // Template groups (fix 90 templates workflow)
+  getTemplateGroups: (output?: string) =>
+    apiFetch<{ groups: TemplateGroup[]; count: number }>(`/api/v1/template/groups${output ? `?output=${encodeURIComponent(output)}` : ''}`),
+  applyTemplate: (req: { template_path: string; group_name: string; output_folder?: string }) =>
+    apiFetch<{ ok: boolean; message: string; group: string; mod_folders: number; total_files: number; template_path: string }>('/api/v1/template/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
     }),
 };

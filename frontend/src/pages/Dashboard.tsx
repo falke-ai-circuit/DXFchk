@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   FolderOpen, Plus, Trash2, Folder, FileSearch, Files,
   FileCheck, FileDiff, FileQuestion, Activity, Loader2, FolderCog,
+  Download, Upload,
 } from 'lucide-react';
 import { useStore } from '../store';
+import { api, type Project } from '../api';
 
 const inputStyle: React.CSSProperties = {
   background: 'var(--bg-elevated)',
@@ -43,6 +45,7 @@ export default function Dashboard() {
   const [outputFolder, setOutputFolder] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchHealth();
@@ -84,9 +87,37 @@ export default function Dashboard() {
     await selectProject(id);
   };
 
-  const matched = results.filter(r => r.status === 'match').length;
-  const different = results.filter(r => r.status === 'different').length;
-  const noTemplate = results.filter(r => r.status === 'no_template').length;
+  const handleExport = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const project = await api.exportProject(id);
+      const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const project = JSON.parse(text) as Project;
+      await api.importProject(project);
+      await fetchProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import project');
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const matched = compareStatus?.matched ?? results.filter(r => r.status === 'match').length;
+  const different = compareStatus?.different ?? results.filter(r => r.status === 'different').length;
+  const noTemplate = compareStatus?.no_template ?? results.filter(r => r.status === 'no_template').length;
   const total = results.length;
 
   return (
@@ -127,7 +158,7 @@ export default function Dashboard() {
       ) : (
         <div className="card" style={{ marginBottom: '16px', textAlign: 'center', padding: '32px' }}>
           <FolderOpen size={32} color="var(--text-muted)" style={{ marginBottom: '8px' }} />
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>No active project. Create one below to get started.</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>No active project. Create one below or import an existing project.</p>
         </div>
       )}
 
@@ -147,6 +178,11 @@ export default function Dashboard() {
           <Plus size={14} />
           New Project
         </button>
+        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => fileInputRef.current?.click()}>
+          <Upload size={14} />
+          Import
+        </button>
+        <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
       </div>
 
       {/* Create Project Form */}
@@ -217,6 +253,9 @@ export default function Dashboard() {
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 {new Date(p.last_used).toLocaleDateString()}
               </span>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleExport(p.id, e)} title="Export project">
+                <Download size={12} />
+              </button>
               <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleDelete(p.id, e)}>
                 <Trash2 size={12} />
               </button>
@@ -235,6 +274,11 @@ export default function Dashboard() {
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
                 {compareStatus.processed_files} / {compareStatus.total_files} ({compareStatus.progress.toFixed(1)}%)
               </span>
+              {compareStatus.elapsed_time && (
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                  · {compareStatus.elapsed_time} / ETA {compareStatus.eta}
+                </span>
+              )}
             </div>
             <div className="progress-track">
               <div className="progress-fill" style={{ width: `${compareStatus.progress}%` }} />

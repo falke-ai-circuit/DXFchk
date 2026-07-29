@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   FolderOpen, Play, Square, Loader2,
   Activity, FileCheck, FileDiff, FileQuestion,
-  ScanLine, GitCompareArrows, RotateCcw,
+  ScanLine, GitCompareArrows, RotateCcw, Clock, Timer, Pause,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type CompareStatus } from '../api';
@@ -45,8 +45,11 @@ export default function Compare() {
   const [moveFiles, setMoveFiles] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [comparing, setComparing] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -74,6 +77,12 @@ export default function Compare() {
     }
     fetchCompareStatus();
     fetchTemplates();
+    // Check for existing session
+    api.getSession().then(resp => {
+      if (resp.session && resp.session.status !== 'completed') {
+        setHasSession(true);
+      }
+    }).catch(() => {});
   }, [activeProject, fetchSettings, fetchCompareStatus, fetchTemplates]);
 
   useEffect(() => {
@@ -86,6 +95,7 @@ export default function Compare() {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
       setComparing(false);
+      setStopping(false);
       fetchResults();
     }
   }, [compareStatus?.running, fetchCompareStatus, fetchResults]);
@@ -112,6 +122,7 @@ export default function Compare() {
         group_by_content: groupByContent,
       });
       setSuccessMsg(result.message || 'Comparison started');
+      setHasSession(true);
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(() => {
         fetchCompareStatus();
@@ -124,29 +135,57 @@ export default function Compare() {
     }
   };
 
-  const handleStop = () => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-    setComparing(false);
-    setSuccessMsg('Comparison stopped by user');
-    fetchCompareStatus();
+  const handleStop = async () => {
+    setStopping(true);
+    try {
+      await api.stopCompare();
+      setSuccessMsg('Stop signal sent — comparison will halt after current file');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to stop');
+    }
+    setStopping(false);
   };
 
-  const handleReset = () => {
+  const handleResume = async () => {
+    setResuming(true);
+    setError(null);
+    try {
+      const result = await api.resumeCompare();
+      setSuccessMsg(`Comparison resumed (${result.skipped} files skipped)`);
+      setComparing(true);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        fetchCompareStatus();
+        fetchResults();
+      }, 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resume');
+    }
+    setResuming(false);
+  };
+
+  const handleReset = async () => {
     setComparing(false);
     setScanning(false);
     setError(null);
     setSuccessMsg(null);
+    setHasSession(false);
+    try {
+      await api.clearSession();
+    } catch { /* ignore */ }
     fetchCompareStatus();
     fetchResults();
   };
 
   const results = useStore.getState().results;
-  const matched = results.filter(r => r.status === 'match').length;
-  const different = results.filter(r => r.status === 'different').length;
-  const noTemplate = results.filter(r => r.status === 'no_template').length;
+  const matched = compareStatus?.matched ?? results.filter(r => r.status === 'match').length;
+  const different = compareStatus?.different ?? results.filter(r => r.status === 'different').length;
+  const noTemplate = compareStatus?.no_template ?? results.filter(r => r.status === 'no_template').length;
 
   const cs: CompareStatus | null = compareStatus;
   const progress = cs?.progress ?? 0;
+  const elapsedTime = cs?.elapsed_time || '00:00:00';
+  const eta = cs?.eta || '--:--:--';
 
   return (
     <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
@@ -218,28 +257,44 @@ export default function Compare() {
         </div>
       </div>
 
-      {/* Action Buttons — matches Python GUI layout */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        <button className="btn btn-primary" onClick={handleStart} disabled={scanning || comparing}>
+      {/* Action Buttons — Start, Stop, Resume, Reset */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
+        <button className="btn btn-primary" onClick={handleStart} disabled={scanning || comparing || stopping}>
           {scanning ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
           {scanning ? 'Scanning Templates...' : comparing ? 'Comparing...' : 'Start'}
         </button>
-        <button className="btn btn-danger" onClick={handleStop} disabled={!comparing}>
-          <Square size={16} />
-          Stop
+        <button className="btn btn-danger" onClick={handleStop} disabled={!comparing || stopping}>
+          {stopping ? <Loader2 size={16} className="spin" /> : <Square size={16} />}
+          {stopping ? 'Stopping...' : 'Stop'}
         </button>
-        <button className="btn btn-secondary" onClick={handleReset}>
+        {hasSession && !comparing && (
+          <button className="btn btn-primary" onClick={handleResume} disabled={resuming}>
+            {resuming ? <Loader2 size={16} className="spin" /> : <Pause size={16} />}
+            {resuming ? 'Resuming...' : 'Resume'}
+          </button>
+        )}
+        <button className="btn btn-secondary" onClick={handleReset} disabled={comparing || stopping}>
           <RotateCcw size={16} />
           Reset Session
         </button>
       </div>
 
-      {/* Progress Section — matches Python GUI */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-          <ProgressCard title="Templates" icon={<ScanLine size={14} />} progress={scanning ? 50 : templateCount > 0 ? 100 : 0} label={scanning ? 'Scanning...' : `${templateCount} loaded`} active={scanning} />
-          <ProgressCard title="Comparison" icon={<GitCompareArrows size={14} />} progress={progress} label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'} active={cs?.running ?? false} />
+      {/* Timing Bar */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <TimingCard icon={<Clock size={14} />} label="Elapsed" value={elapsedTime} active={cs?.running ?? false} />
+        <TimingCard icon={<Timer size={14} />} label="ETA" value={eta} active={cs?.running ?? false} />
+        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px' }}>
+          <div style={{ color: 'var(--accent)', display: 'flex', alignItems: 'center' }}><ScanLine size={16} /></div>
+          <div>
+            <div style={{ fontSize: '18px', fontWeight: 700 }}>{templateCount}</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Templates Loaded</div>
+          </div>
         </div>
+      </div>
+
+      {/* Progress Section */}
+      <div style={{ marginBottom: '16px' }}>
+        <ProgressCard title="Comparison" icon={<GitCompareArrows size={14} />} progress={progress} label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'} active={cs?.running ?? false} />
       </div>
 
       {/* Summary Stats */}
@@ -253,12 +308,12 @@ export default function Compare() {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
           <Activity size={16} color="var(--accent)" />
-          <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Log</h2>
+          <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Live Log</h2>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
             {logs.length} entries
           </span>
         </div>
-        <div style={{ padding: '12px 16px', maxHeight: '350px', overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        <div style={{ padding: '12px 16px', maxHeight: '400px', overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
           {logs.length === 0 ? (
             <span style={{ color: 'var(--text-muted)' }}>No logs yet. Start a comparison to see real-time output.</span>
           ) : (
@@ -275,9 +330,21 @@ export default function Compare() {
   );
 }
 
+function TimingCard({ icon, label, value, active }: { icon: React.ReactNode; label: string; value: string; active: boolean }) {
+  return (
+    <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px' }}>
+      <div style={{ color: active ? 'var(--accent)' : 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>{icon}</div>
+      <div>
+        <div style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{value}</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressCard({ title, icon, progress, label, active }: { title: string; icon: React.ReactNode; progress: number; label: string; active: boolean }) {
   return (
-    <div className="card" style={{ flex: 1 }}>
+    <div className="card">
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
         {active && <Loader2 size={12} className="spin" color="var(--accent)" />}
         {icon}

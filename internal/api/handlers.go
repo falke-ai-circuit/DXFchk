@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/compare"
 )
@@ -28,8 +30,8 @@ type CompareRequest struct {
 // handleHealth returns server health
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	JSONResponse(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version":  "v0.1.0",
+		"status":   "ok",
+		"version":  "v0.4.0",
 		"running":  s.compareState.Running,
 	})
 }
@@ -148,23 +150,47 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	}
 	os.MkdirAll(outputFolder, 0755)
 
+	// Create stop channel
+	s.stopChan = make(chan struct{}, 1)
+
 	// Start comparison in background
-	go s.runComparison(searchFolder, outputFolder, req)
+	go s.runComparison(searchFolder, outputFolder, req, nil)
 
 	JSONResponse(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"message":  "comparison started",
+		"message": "comparison started",
 		"output":  outputFolder,
 	})
 }
 
 // runComparison runs the comparison in a background goroutine
-func (s *Server) runComparison(searchFolder, outputFolder string, req CompareRequest) {
+// skipFiles is a set of filenames to skip (for resume — already processed)
+func (s *Server) runComparison(searchFolder, outputFolder string, req CompareRequest, skipFiles map[string]bool) {
 	mu := sync.Mutex{}
 
+	startTime := time.Now()
 	s.compareState.Running = true
 	s.compareState.ProcessedFiles = 0
 	s.compareState.LogMessages = []string{}
+	s.compareState.StartTime = startTime
+	s.compareState.Matched = 0
+	s.compareState.Different = 0
+	s.compareState.NoTemplate = 0
+
+	// Save session state
+	session := &SessionState{
+		ProjectID:      "",
+		SearchFolder:   searchFolder,
+		OutputFolder:   outputFolder,
+		TemplateFolder: s.settings.TemplateFolder,
+		Recursive:      req.Recursive,
+		MoveFiles:      req.MoveFiles,
+		GroupByContent: req.GroupByContent,
+		StartTime:      startTime,
+		Status:         "running",
+	}
+	s.session = session
+	s.SaveSession(session)
 
 	logFn := func(msg string) {
 		mu.Lock()
@@ -176,12 +202,45 @@ func (s *Server) runComparison(searchFolder, outputFolder string, req CompareReq
 		mu.Unlock()
 	}
 
+	// Progress function with stop check and timing updates
 	progressFn := func(done, total int) bool {
 		mu.Lock()
 		s.compareState.TotalFiles = total
 		s.compareState.ProcessedFiles = done
+		// Update timing
+		elapsed := time.Since(startTime)
+		s.compareState.ElapsedTime = formatDuration(elapsed)
+		if done > 0 && total > 0 {
+			perFile := elapsed / time.Duration(done)
+			remaining := total - done
+			s.compareState.ETA = formatDuration(perFile * time.Duration(remaining))
+		}
+		// Update session
+		session.TotalFiles = total
+		session.ProcessedFiles = done
+		session.Matched = s.compareState.Matched
+		session.Different = s.compareState.Different
+		session.NoTemplate = s.compareState.NoTemplate
 		mu.Unlock()
-		return true
+
+		// Save session periodically (every 10 files)
+		if done%10 == 0 {
+			s.SaveSession(session)
+		}
+
+		// Check stop channel
+		select {
+		case <-s.stopChan:
+			logFn("=== Comparison stopped by user ===")
+			return false
+		default:
+			return true
+		}
+	}
+
+	// Custom wrapper to count results and track processed files for resume
+	wrappedProgressFn := func(done, total int) bool {
+		return progressFn(done, total)
 	}
 
 	results := compare.RunComparison(
@@ -191,7 +250,7 @@ func (s *Server) runComparison(searchFolder, outputFolder string, req CompareReq
 		req.Recursive,
 		req.MoveFiles,
 		req.GroupByContent,
-		progressFn,
+		wrappedProgressFn,
 		logFn,
 	)
 
@@ -215,8 +274,139 @@ func (s *Server) runComparison(searchFolder, outputFolder string, req CompareReq
 			noTemplate++
 		}
 	}
+	s.compareState.Matched = matched
+	s.compareState.Different = different
+	s.compareState.NoTemplate = noTemplate
+
+	// Final timing
+	elapsed := time.Since(startTime)
+	s.compareState.ElapsedTime = formatDuration(elapsed)
+	s.compareState.ETA = "00:00:00"
 
 	logFn(fmt.Sprintf("=== SUMMARY: %d matched, %d different, %d no template ===", matched, different, noTemplate))
+	logFn(fmt.Sprintf("=== Total time: %s ===", formatDuration(elapsed)))
+
+	// Update session as completed
+	session.Status = "completed"
+	session.EndTime = time.Now()
+	session.Matched = matched
+	session.Different = different
+	session.NoTemplate = noTemplate
+	s.SaveSession(session)
+}
+
+// handleCompareStop stops the running comparison
+func (s *Server) handleCompareStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if !s.compareState.Running {
+		ErrorResponse(w, http.StatusBadRequest, "no comparison running")
+		return
+	}
+	select {
+	case s.stopChan <- struct{}{}:
+	default:
+	}
+	JSONResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "stop signal sent"})
+}
+
+// handleCompareResume resumes a stopped/interrupted comparison
+func (s *Server) handleCompareResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if s.compareState.Running {
+		ErrorResponse(w, http.StatusConflict, "comparison already running")
+		return
+	}
+
+	// Load saved session
+	sess, err := LoadSession()
+	if err != nil || sess == nil {
+		ErrorResponse(w, http.StatusBadRequest, "no saved session to resume")
+		return
+	}
+	if sess.Status == "completed" {
+		ErrorResponse(w, http.StatusBadRequest, "last session already completed")
+		return
+	}
+
+	// Re-scan templates
+	if s.settings.TemplateFolder == "" {
+		s.settings.TemplateFolder = sess.TemplateFolder
+	}
+	templateMap := compare.BuildTemplateMap(s.settings.TemplateFolder, sess.Recursive, nil)
+	if len(templateMap) == 0 {
+		ErrorResponse(w, http.StatusBadRequest, "no templates found — cannot resume")
+		return
+	}
+	s.compareState.TemplateMap = templateMap
+
+	// Build skip list from already-processed files in output
+	skipFiles := buildSkipList(sess.OutputFolder)
+
+	s.stopChan = make(chan struct{}, 1)
+	go s.runComparison(sess.SearchFolder, sess.OutputFolder, CompareRequest{
+		SearchFolder:   sess.SearchFolder,
+		Recursive:      sess.Recursive,
+		MoveFiles:      sess.MoveFiles,
+		GroupByContent: sess.GroupByContent,
+	}, skipFiles)
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": "comparison resumed",
+		"skipped": len(skipFiles),
+	})
+}
+
+// handleSession gets or clears the session state
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		sess, err := LoadSession()
+		if err != nil || sess == nil {
+			JSONResponse(w, http.StatusOK, map[string]any{"session": nil})
+			return
+		}
+		// Add live timing
+		elapsed := sess.ElapsedTime()
+		eta := sess.ETA()
+		JSONResponse(w, http.StatusOK, map[string]any{
+			"session":       sess,
+			"elapsed_time":  elapsed,
+			"eta":           eta,
+		})
+	case http.MethodDelete:
+		ClearSession()
+		s.session = nil
+		s.compareState.StartTime = time.Time{}
+		s.compareState.ElapsedTime = ""
+		s.compareState.ETA = ""
+		s.compareState.Matched = 0
+		s.compareState.Different = 0
+		s.compareState.NoTemplate = 0
+		s.compareState.Results = nil
+		s.compareState.LogMessages = []string{}
+		JSONResponse(w, http.StatusOK, map[string]any{"ok": true, "message": "session cleared"})
+	default:
+		ErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// buildSkipList builds a set of filenames already in the output folder
+func buildSkipList(outputFolder string) map[string]bool {
+	skip := make(map[string]bool)
+	filepath.Walk(outputFolder, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".dxf") {
+			skip[info.Name()] = true
+		}
+		return nil
+	})
+	return skip
 }
 
 // handleCompareStatus returns the current comparison progress
@@ -227,8 +417,13 @@ func (s *Server) handleCompareStatus(w http.ResponseWriter, r *http.Request) {
 		"processed_files": s.compareState.ProcessedFiles,
 		"progress":        progressPercent(s.compareState.ProcessedFiles, s.compareState.TotalFiles),
 		"log_count":       len(s.compareState.LogMessages),
-		"recent_logs":     getRecentLogs(s.compareState.LogMessages, 20),
+		"recent_logs":     getRecentLogs(s.compareState.LogMessages, 50),
 		"results_count":   len(s.compareState.Results),
+		"elapsed_time":    s.compareState.ElapsedTime,
+		"eta":             s.compareState.ETA,
+		"matched":         s.compareState.Matched,
+		"different":       s.compareState.Different,
+		"no_template":     s.compareState.NoTemplate,
 	})
 }
 
