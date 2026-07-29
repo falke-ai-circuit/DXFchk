@@ -966,6 +966,7 @@ func (c *ComparisonProcessor) ensureAllFoldersHaveLogs() {
 			logContent.WriteString(fmt.Sprintf("- %s\n", f))
 		}
 		logContent.WriteString("\n\nNote: This is an automatically generated log for a folder that was missing a detailed log file.\n")
+		logContent.WriteString("For folders like BI001, BI001p1, BO001p6, etc., detailed analysis was not recorded during processing.\n")
 		os.WriteFile(logPath, []byte(logContent.String()), 0644)
 		c.log(fmt.Sprintf("Saved basic log file to: %s", logPath))
 	}
