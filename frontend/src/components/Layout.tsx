@@ -94,28 +94,55 @@ export default function Layout() {
 }
 
 function GlobalStatusBar() {
-  const [jobs, setJobs] = React.useState<any[]>([]); // running jobs from /api/v1/compare/jobs
+  const [jobs, setJobs] = React.useState<any[]>([]);
+  const [health, setHealth] = React.useState<any>(null);
 
-  // Poll every 2 seconds for all running jobs
+  // Poll every 2 seconds for jobs + health
   React.useEffect(() => {
-    const fetchJobs = async () => {
+    const fetchAll = async () => {
       try {
-        const res = await fetch('/api/v1/compare/jobs');
-        if (res.ok) {
-          const data = await res.json();
+        const [jobsRes, healthRes] = await Promise.all([
+          fetch('/api/v1/compare/jobs'),
+          fetch('/api/v1/health'),
+        ]);
+        if (jobsRes.ok) {
+          const data = await jobsRes.json();
           setJobs(data.jobs || []);
+        }
+        if (healthRes.ok) {
+          setHealth(await healthRes.json());
         }
       } catch { /* ignore */ }
     };
-    fetchJobs();
-    const interval = setInterval(fetchJobs, 2000);
+    fetchAll();
+    const interval = setInterval(fetchAll, 2000);
     return () => clearInterval(interval);
   }, []);
 
-  if (jobs.length === 0) return null;
-
   const runningJobs = jobs.filter(j => j.running);
-  if (runningJobs.length === 0) return null;
+  const completedJobs = jobs.filter(j => !j.running && j.processed_files > 0);
+  const hasContent = runningJobs.length > 0 || completedJobs.length > 0;
+
+  if (!hasContent && !health?.running) {
+    // Show idle status bar with health info
+    return (
+      <div style={{
+        flexShrink: 0, backgroundColor: 'var(--bg-elevated)',
+        borderTop: '1px solid var(--border)', padding: '4px 12px',
+        display: 'flex', alignItems: 'center', gap: '8px',
+        fontSize: '11px', fontFamily: 'var(--font-mono)',
+      }}>
+        <span style={{ color: 'var(--text-muted)' }}>
+          {health?.running ? `Running: ${health.running_jobs} job(s)` : 'Idle'}
+        </span>
+        {completedJobs.length > 0 && (
+          <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            Last: {completedJobs[0].project_name} — {completedJobs[0].matched} match, {completedJobs[0].different} diff, {completedJobs[0].no_template} no-tmpl
+          </span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -133,36 +160,50 @@ function GlobalStatusBar() {
         overflowX: 'auto',
       }}
     >
-      <Loader2 size={12} className="spin" color="var(--accent)" />
-      <span style={{ color: 'var(--accent)', fontWeight: 600, flexShrink: 0 }}>
-        {runningJobs.length > 1 ? `${runningJobs.length} jobs` : 'Comparing'}
-      </span>
-      {runningJobs.map(job => (
-        <span key={job.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-          {runningJobs.length > 1 && job.project_name && (
-            <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{job.project_name}:</span>
-          )}
-          <span style={{ color: 'var(--text-secondary)' }}>
-            {job.processed_files}/{job.total_files} ({job.progress?.toFixed(1)}%)
+      {runningJobs.length > 0 ? (
+        <>
+          <Loader2 size={12} className="spin" color="var(--accent)" />
+          <span style={{ color: 'var(--accent)', fontWeight: 600, flexShrink: 0 }}>
+            {runningJobs.length > 1 ? `${runningJobs.length} jobs` : 'Comparing'}
           </span>
-          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>ETA {job.eta}</span>
-          <button
-            className="btn btn-danger"
-            style={{ padding: '1px 6px', fontSize: 9 }}
-            onClick={async () => {
-              try {
-                await fetch('/api/v1/compare/stop', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ project_id: job.id }),
-                });
-              } catch { /* ignore */ }
-            }}
-          >
-            <Square size={8} />
-          </button>
-        </span>
-      ))}
+          {runningJobs.map(job => (
+            <span key={job.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+              {runningJobs.length > 1 && job.project_name && (
+                <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{job.project_name}:</span>
+              )}
+              <span style={{ color: 'var(--text-secondary)' }}>
+                {job.processed_files}/{job.total_files} ({job.progress?.toFixed(1)}%)
+              </span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{job.elapsed_time} / ETA {job.eta}</span>
+              <button
+                className="btn btn-danger"
+                style={{ padding: '1px 6px', fontSize: 9 }}
+                onClick={async () => {
+                  try {
+                    await fetch('/api/v1/compare/stop', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ project_id: job.id }),
+                    });
+                  } catch { /* ignore */ }
+                }}
+              >
+                <Square size={8} />
+              </button>
+            </span>
+          ))}
+        </>
+      ) : (
+        // Completed jobs
+        <>
+          <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Done</span>
+          {completedJobs.map(job => (
+            <span key={job.id} style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+              {job.project_name}: {job.matched} match, {job.different} diff, {job.no_template} no-tmpl ({job.elapsed_time})
+            </span>
+          ))}
+        </>
+      )}
     </div>
   );
 }

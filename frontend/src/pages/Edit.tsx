@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Wrench, FolderTree, Folder, FileText, ChevronRight, ChevronDown,
-  RefreshCw, Loader2, Save, Code, Play, Layers, Eye,
+  RefreshCw, Loader2, Save, Code, Play, Layers, Eye, Plus,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type TreeNode, type TemplateGroup, type DXFRenderResponse } from '../api';
@@ -32,6 +32,10 @@ export default function Edit() {
   const [editOps, setEditOps] = useState<string>('[\n  {"find": "", "replace": ""}\n]');
   const [applying, setApplying] = useState(false);
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
+
+  // Right-click context menu
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string } | null>(null);
+  const [createTemplateMsg, setCreateTemplateMsg] = useState<string | null>(null);
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -117,6 +121,22 @@ export default function Edit() {
     setApplying(false);
   };
 
+  const handleCreateTemplateFromContext = async (filePath: string) => {
+    setCreateTemplateMsg('Creating template...');
+    try {
+      const resp = await api.createTemplate(filePath, activeProject?.template_folder);
+      setCreateTemplateMsg(`✓ Template created: ${resp.name}`);
+    } catch (err) {
+      setCreateTemplateMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, filePath: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, filePath });
+  };
+
   if (!activeProject) {
     return (
       <div style={{ padding: '24px', textAlign: 'center' }}>
@@ -173,8 +193,8 @@ export default function Edit() {
           </div>
         )}
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
-          {tree && <EditTreeView node={tree} level={0} selectedFile={selectedFile} onFileClick={handleFileClick} />}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }} onClick={() => setContextMenu(null)}>
+          {tree && <EditTreeView node={tree} level={0} selectedFile={selectedFile} onFileClick={handleFileClick} onContextMenu={handleContextMenu} />}
         </div>
       </div>
 
@@ -222,6 +242,12 @@ export default function Edit() {
             {saveMsg && (
               <div style={{ padding: '6px 14px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--accent)' }}>
                 {saveMsg}
+              </div>
+            )}
+
+            {createTemplateMsg && (
+              <div style={{ padding: '6px 14px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--accent)' }}>
+                {createTemplateMsg}
               </div>
             )}
 
@@ -314,16 +340,50 @@ export default function Edit() {
           </div>
         )}
       </div>
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed', top: contextMenu.y, left: contextMenu.x,
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            borderRadius: 6, padding: '4px 0', zIndex: 2000,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)', minWidth: 220,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            onClick={() => { handleCreateTemplateFromContext(contextMenu.filePath); setContextMenu(null); }}
+            style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <Plus size={14} color="var(--accent)" />
+            Create template from this file
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+          <div
+            onClick={() => { setSelectedFile(contextMenu.filePath); handleFileClick(contextMenu.filePath); setContextMenu(null); }}
+            style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <Eye size={14} color="var(--accent)" />
+            Open in editor
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // EditTreeView — tree showing DXF files
-function EditTreeView({ node, level, selectedFile, onFileClick }: {
+function EditTreeView({ node, level, selectedFile, onFileClick, onContextMenu }: {
   node: TreeNode;
   level: number;
   selectedFile: string | null;
   onFileClick: (filePath: string) => void;
+  onContextMenu: (e: React.MouseEvent, filePath: string) => void;
 }) {
   const [expanded, setExpanded] = useState(level < 2);
 
@@ -334,6 +394,7 @@ function EditTreeView({ node, level, selectedFile, onFileClick }: {
     return (
       <div
         onClick={() => onFileClick(node.path)}
+        onContextMenu={(e) => onContextMenu(e, node.path)}
         style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '3px 8px', marginLeft: level * 16, cursor: 'pointer',
@@ -372,7 +433,7 @@ function EditTreeView({ node, level, selectedFile, onFileClick }: {
       {expanded && node.children && (
         <div>
           {node.children.map((child, i) => (
-            <EditTreeView key={i} node={child} level={level + 1} selectedFile={selectedFile} onFileClick={onFileClick} />
+            <EditTreeView key={i} node={child} level={level + 1} selectedFile={selectedFile} onFileClick={onFileClick} onContextMenu={onContextMenu} />
           ))}
         </div>
       )}

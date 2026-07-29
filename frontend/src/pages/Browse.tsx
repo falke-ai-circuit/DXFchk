@@ -57,11 +57,41 @@ export default function Browse() {
 
   const findTemplateForFile = async (filePath: string) => {
     if (!activeProject?.template_folder) return null;
-    const fileName = filePath.split('\\').pop() || '';
+    // Derive template name from the folder structure:
+    // - If file is in Output/TEMPLATE_NAME/TEMPLATE_NAME_mod1/ → template = TEMPLATE_NAME
+    // - If file is in Output/TEMPLATE_NAME/ → template = TEMPLATE_NAME
+    // - If file is in Output/notemplate/ → no template
+    const parts = filePath.split('\\');
+    // Find the output folder in the path to get the template folder name
+    const outputBase = activeProject.output_folder?.split('\\').pop() || '';
+    const outputIdx = parts.findIndex(p => p === outputBase);
+    let templateName = '';
+    if (outputIdx >= 0 && outputIdx + 1 < parts.length) {
+      templateName = parts[outputIdx + 1];
+    } else {
+      // Fallback: use the immediate parent folder if it's not a _mod folder
+      const parentFolder = parts[parts.length - 2] || '';
+      if (parentFolder.includes('_mod')) {
+        templateName = parentFolder.split('_mod')[0];
+      } else {
+        templateName = parentFolder;
+      }
+    }
+    if (!templateName || templateName === 'notemplate') return null;
+
+    // Find template file in template folder — match by filename prefix
     try {
       const resp = await api.browseFolder(activeProject.template_folder);
-      const found = resp.children?.find(c => c.name === fileName);
-      if (found) return found.path;
+      // Try exact match first (TEMPLATE_NAME.dxf)
+      const exactMatch = resp.children?.find(c =>
+        !c.is_dir && c.name.toLowerCase().replace('.dxf', '') === templateName.toLowerCase()
+      );
+      if (exactMatch) return exactMatch.path;
+      // Try prefix match (TEMPLATE_NAME*.dxf)
+      const prefixMatch = resp.children?.find(c =>
+        !c.is_dir && c.name.toLowerCase().startsWith(templateName.toLowerCase()) && c.name.toLowerCase().endsWith('.dxf')
+      );
+      if (prefixMatch) return prefixMatch.path;
     } catch { /* ignore */ }
     return null;
   };
