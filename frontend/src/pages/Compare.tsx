@@ -112,11 +112,10 @@ export default function Compare() {
     if (!templateFolder) { setError('Template folder is required'); return; }
     if (!searchFolder) { setError('Search folder is required'); return; }
 
-    setScanning(true);
+    setComparing(true);
+    setSuccessMsg('Starting comparison...');
     try {
-      await scanTemplates(templateFolder, recursive);
-      setScanning(false);
-      setComparing(true);
+      // Backend handles template scanning + comparison in one call
       const result = await api.startCompare({
         search_folder: searchFolder,
         recursive,
@@ -133,7 +132,6 @@ export default function Compare() {
         fetchResults();
       }, 1000);
     } catch (err) {
-      setScanning(false);
       setComparing(false);
       setError(err instanceof Error ? err.message : 'Failed to start comparison');
     }
