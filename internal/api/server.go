@@ -29,12 +29,14 @@ type Server struct {
 
 // Settings holds the application settings
 type Settings struct {
-	TemplateFolder  string `json:"template_folder"`
-	SearchFolder    string `json:"search_folder"`
-	OutputFolder    string `json:"output_folder"`
-	Recursive       bool   `json:"recursive"`
-	MoveFiles       bool   `json:"move_files"`
-	GroupByContent  bool   `json:"group_by_content"`
+	TemplateFolder   string `json:"template_folder"`
+	SearchFolder     string `json:"search_folder"`
+	OutputFolder     string `json:"output_folder"`
+	Recursive        bool   `json:"recursive"`
+	MoveFiles        bool   `json:"move_files"`
+	GroupByContent   bool   `json:"group_by_content"`
+	AutoCreateMod    bool   `json:"auto_create_mod_templates"`
+	AutoApplyToGroup  bool  `json:"auto_apply_to_group"`
 }
 
 // CompareState holds the current comparison state
@@ -105,6 +107,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/project/export", s.handleProjectExport)
 	s.mux.HandleFunc("POST /api/v1/template/apply", s.handleApplyTemplate)
 	s.mux.HandleFunc("GET /api/v1/template/groups", s.handleTemplateGroups)
+	s.mux.HandleFunc("GET /api/v1/log", s.handleLogContent)
+	s.mux.HandleFunc("GET /api/v1/dxf/content", s.handleDXFContent)
+	s.mux.HandleFunc("POST /api/v1/dxf/content", s.handleDXFContent)
+	s.mux.HandleFunc("POST /api/v1/template/edit-script", s.handleEditScript)
+	s.mux.HandleFunc("GET /api/v1/template/group", s.handleTemplateGroupDetail) // ?name=XXX
 }
 
 // ServeHTTP implements http.Handler

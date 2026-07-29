@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, FileSearch } from 'lucide-react';
+import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, Wrench } from 'lucide-react';
 
 export default function Layout() {
   const tabStyle = (isActive: boolean): React.CSSProperties => ({
@@ -33,19 +33,32 @@ export default function Layout() {
       >
         <div
           style={{
-            fontSize: '14px',
-            fontWeight: 700,
-            color: 'var(--accent)',
-            padding: '0 12px',
-            fontFamily: 'var(--font-mono)',
-            marginRight: '8px',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: '8px',
+            padding: '0 12px',
+            marginRight: '8px',
           }}
         >
-          <FileSearch size={18} color="var(--accent)" />
-          <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent)' }}>DXFchk</span>
+          {/* Valmet-style logo: green circle with V */}
+          <div style={{
+            width: 24,
+            height: 24,
+            borderRadius: '50%',
+            backgroundColor: 'var(--accent)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '14px',
+            fontWeight: 900,
+            color: '#fff',
+            fontFamily: 'var(--font-sans)',
+          }}>
+            V
+          </div>
+          <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+            DXFchk
+          </span>
         </div>
 
         <NavLink to="/" end style={({ isActive }) => tabStyle(isActive)}>
@@ -61,6 +74,11 @@ export default function Layout() {
         <NavLink to="/browse" style={({ isActive }) => tabStyle(isActive)}>
           <FolderTree size={14} />
           Browse
+        </NavLink>
+
+        <NavLink to="/edit" style={({ isActive }) => tabStyle(isActive)}>
+          <Wrench size={14} />
+          Edit
         </NavLink>
 
         <NavLink to="/settings" style={({ isActive }) => tabStyle(isActive)}>

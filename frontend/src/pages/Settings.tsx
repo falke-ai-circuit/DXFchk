@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, CheckCircle, XCircle, Loader2, Heart } from 'lucide-react';
+import { Settings as SettingsIcon, Save, CheckCircle, XCircle, Loader2, Heart, Wrench, Layers } from 'lucide-react';
 import { useStore } from '../store';
 import type { SettingsResponse } from '../api';
 
@@ -32,6 +32,8 @@ export default function Settings() {
     recursive: true,
     move_files: false,
     group_by_content: true,
+    auto_create_mod_templates: false,
+    auto_apply_to_group: false,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -46,7 +48,11 @@ export default function Settings() {
 
   useEffect(() => {
     if (settings) {
-      setForm(settings);
+      setForm({
+        ...settings,
+        auto_create_mod_templates: settings.auto_create_mod_templates ?? false,
+        auto_apply_to_group: settings.auto_apply_to_group ?? false,
+      });
     }
   }, [settings]);
 
@@ -125,65 +131,64 @@ export default function Settings() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
             <label style={labelStyle}>Template Folder</label>
-            <input
-              type="text"
-              value={form.template_folder}
-              onChange={(e) => setForm({ ...form, template_folder: e.target.value })}
-              placeholder="C:\path\to\templates"
-              style={inputStyle}
-            />
+            <input type="text" value={form.template_folder} onChange={(e) => setForm({ ...form, template_folder: e.target.value })} placeholder="C:\path\to\templates" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Search Folder</label>
-            <input
-              type="text"
-              value={form.search_folder}
-              onChange={(e) => setForm({ ...form, search_folder: e.target.value })}
-              placeholder="C:\path\to\search"
-              style={inputStyle}
-            />
+            <input type="text" value={form.search_folder} onChange={(e) => setForm({ ...form, search_folder: e.target.value })} placeholder="C:\path\to\search" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Output Folder</label>
-            <input
-              type="text"
-              value={form.output_folder}
-              onChange={(e) => setForm({ ...form, output_folder: e.target.value })}
-              placeholder="C:\path\to\output"
-              style={inputStyle}
-            />
+            <input type="text" value={form.output_folder} onChange={(e) => setForm({ ...form, output_folder: e.target.value })} placeholder="C:\path\to\output" style={inputStyle} />
           </div>
         </div>
       </div>
 
       {/* Default Options */}
       <div className="card" style={{ marginBottom: '16px' }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Default Options</h2>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Comparison Options</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={form.recursive}
-              onChange={(e) => setForm({ ...form, recursive: e.target.checked })}
-            />
+            <input type="checkbox" checked={form.recursive} onChange={(e) => setForm({ ...form, recursive: e.target.checked })} />
             <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Recursive scan (search subdirectories)</span>
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={form.group_by_content}
-              onChange={(e) => setForm({ ...form, group_by_content: e.target.checked })}
-            />
+            <input type="checkbox" checked={form.group_by_content} onChange={(e) => setForm({ ...form, group_by_content: e.target.checked })} />
             <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Group by content hash</span>
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={form.move_files}
-              onChange={(e) => setForm({ ...form, move_files: e.target.checked })}
-            />
+            <input type="checkbox" checked={form.move_files} onChange={(e) => setForm({ ...form, move_files: e.target.checked })} />
             <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Move files to output folder</span>
           </label>
+        </div>
+      </div>
+
+      {/* Template Workflow Options */}
+      <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Wrench size={16} color="var(--accent)" />
+          Template Fix Workflow Options
+        </h2>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: '16px' }}>
+          Configure how DXFchk handles the "fix 90 templates instead of 1500 files" workflow.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.auto_create_mod_templates} onChange={(e) => setForm({ ...form, auto_create_mod_templates: e.target.checked })} />
+            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Auto-create mod templates</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— automatically create a template file in each _modN folder after comparison</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.auto_apply_to_group} onChange={(e) => setForm({ ...form, auto_apply_to_group: e.target.checked })} />
+            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Auto-apply template to group</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— when a template is fixed in a _modN folder, automatically apply it to all files in that group</span>
+          </label>
+        </div>
+        <div style={{ marginTop: '16px', padding: '12px', background: 'rgba(0,138,0,0.05)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+          <Layers size={12} style={{ display: 'inline', marginRight: '6px' }} />
+          <strong>How it works:</strong> After comparison, files are grouped by template (e.g., 80 groups).
+          Each _modN folder contains files with the same type of difference. Fix one template per group
+          in the Edit page, then apply it to all files in that group — instead of fixing each file individually.
         </div>
       </div>
 

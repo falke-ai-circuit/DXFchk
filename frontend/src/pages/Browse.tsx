@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderTree, Folder, FileText, ChevronRight, ChevronDown,
-  RefreshCw, Loader2, GitCompare, Plus, AlertCircle, Wrench, Layers,
+  RefreshCw, Loader2, GitCompare, Plus, AlertCircle, Wrench, Layers, FileText as FileLog,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup } from '../api';
@@ -10,7 +10,6 @@ export default function Browse() {
   const { activeProject } = useStore();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(false);
-  const [empty, setEmpty] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<DiffResponse | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -20,6 +19,9 @@ export default function Browse() {
   const [groups, setGroups] = useState<TemplateGroup[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState<string | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const [compareMode, setCompareMode] = useState<'template' | 'mod'>('template');
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -29,10 +31,8 @@ export default function Browse() {
     try {
       const resp = await api.browse(outputFolder);
       setTree(resp.tree);
-      setEmpty(resp.empty);
     } catch {
       setTree(null);
-      setEmpty(true);
     }
     setLoading(false);
   }, [outputFolder]);
@@ -52,18 +52,30 @@ export default function Browse() {
     setGroupsLoading(false);
   };
 
-  // Find template file for a given module file
   const findTemplateForFile = async (filePath: string) => {
     if (!activeProject?.template_folder) return null;
-
     const fileName = filePath.split('\\').pop() || '';
-
     try {
       const resp = await api.browseFolder(activeProject.template_folder);
       const found = resp.children?.find(c => c.name === fileName);
       if (found) return found.path;
     } catch { /* ignore */ }
+    return null;
+  };
 
+  const findModTemplate = async (filePath: string) => {
+    // Look for {template}_fixed.dxf in the same folder
+    const dir = filePath.substring(0, filePath.lastIndexOf('\\'));
+    // Extract template name from folder (e.g., "BI001" from "BI001_mod1")
+    const folderName = dir.split('\\').pop() || '';
+    if (folderName.includes('_mod')) {
+      const baseName = folderName.split('_mod')[0];
+      const fixedPath = dir + '\\' + baseName + '_fixed.dxf';
+      try {
+        const resp = await api.getDXFContent(fixedPath);
+        if (resp.content) return fixedPath;
+      } catch { /* not found */ }
+    }
     return null;
   };
 
@@ -72,8 +84,27 @@ export default function Browse() {
     setDiff(null);
     setCreateTemplateMsg(null);
     setApplyMsg(null);
+    setLogContent(null);
 
-    // Try to find corresponding template
+    const isLog = filePath.toLowerCase().endsWith('.log');
+    const isDXF = filePath.toLowerCase().endsWith('.dxf');
+
+    if (isLog) {
+      // Load log content
+      setLogLoading(true);
+      try {
+        const resp = await api.getLogContent(filePath);
+        setLogContent(resp.content);
+      } catch (err) {
+        setLogContent('Error loading log: ' + (err instanceof Error ? err.message : 'unknown'));
+      }
+      setLogLoading(false);
+      return;
+    }
+
+    if (!isDXF) return;
+
+    // For DXF files, find template and show diff
     const tmpl = await findTemplateForFile(filePath);
     setTemplatePath(tmpl);
 
@@ -86,6 +117,37 @@ export default function Browse() {
         console.error('Diff failed:', err);
       }
       setDiffLoading(false);
+    }
+  };
+
+  const handleSwitchCompareMode = async (mode: 'template' | 'mod') => {
+    if (!selectedFile) return;
+    setCompareMode(mode);
+    setDiff(null);
+
+    if (mode === 'mod') {
+      // Compare against mod template (fixed template in same folder)
+      const modTemplate = await findModTemplate(selectedFile);
+      if (modTemplate) {
+        setDiffLoading(true);
+        try {
+          const d = await api.diff(modTemplate, selectedFile);
+          setDiff(d);
+        } catch { /* ignore */ }
+        setDiffLoading(false);
+      }
+    } else {
+      // Compare against original template
+      const tmpl = await findTemplateForFile(selectedFile);
+      setTemplatePath(tmpl);
+      if (tmpl) {
+        setDiffLoading(true);
+        try {
+          const d = await api.diff(tmpl, selectedFile);
+          setDiff(d);
+        } catch { /* ignore */ }
+        setDiffLoading(false);
+      }
     }
   };
 
@@ -109,7 +171,6 @@ export default function Browse() {
         output_folder: outputFolder,
       });
       setApplyMsg(`✓ ${resp.message} (${resp.total_files} files affected)`);
-      // Reload tree
       loadTree();
     } catch (err) {
       setApplyMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -134,13 +195,12 @@ export default function Browse() {
     );
   }
 
-  if (empty || !tree) {
+  if (!tree) {
     return (
       <div style={{ padding: '24px', textAlign: 'center' }}>
         <p style={{ color: 'var(--text-muted)' }}>Output folder is empty. Run a comparison first.</p>
         <button className="btn btn-primary" style={{ marginTop: '12px' }} onClick={loadTree}>
-          <RefreshCw size={14} />
-          Refresh
+          <RefreshCw size={14} /> Refresh
         </button>
       </div>
     );
@@ -193,7 +253,7 @@ export default function Browse() {
         </div>
       </div>
 
-      {/* Right Panel — DXF Visual Diff */}
+      {/* Right Panel — Content Viewer */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {selectedFile ? (
           <>
@@ -202,20 +262,40 @@ export default function Browse() {
               <span style={{ fontSize: '13px', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
                 {selectedFile.split('\\').pop()}
               </span>
-              {templatePath && (
+              {templatePath && selectedFile.toLowerCase().endsWith('.dxf') && (
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>
                   vs {templatePath.split('\\').pop()}
                 </span>
               )}
-              {diff && diff.summary.added_count > 0 && (
+
+              {/* Compare mode switcher for DXF files in _mod folders */}
+              {selectedFile.includes('_mod') && selectedFile.toLowerCase().endsWith('.dxf') && (
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+                  <button
+                    className={`btn ${compareMode === 'template' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ padding: '4px 10px', fontSize: 10 }}
+                    onClick={() => handleSwitchCompareMode('template')}
+                  >
+                    vs Template
+                  </button>
+                  <button
+                    className={`btn ${compareMode === 'mod' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ padding: '4px 10px', fontSize: 10 }}
+                    onClick={() => handleSwitchCompareMode('mod')}
+                  >
+                    vs Fixed Template
+                  </button>
+                </div>
+              )}
+
+              {diff && diff.summary.added_count > 0 && selectedFile.toLowerCase().endsWith('.dxf') && (
                 <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '4px 12px', fontSize: 11 }} onClick={handleCreateTemplate}>
                   <Plus size={12} />
                   Create Template from this file
                 </button>
               )}
-              {selectedFile && selectedFile.includes('_mod') && (
+              {selectedFile && selectedFile.includes('_mod') && selectedFile.toLowerCase().endsWith('.dxf') && (
                 <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '4px 12px', fontSize: 11 }} onClick={() => {
-                  // Extract group name from folder path
                   const parts = selectedFile.split('\\');
                   const modFolder = parts.find(p => p.includes('_mod'));
                   if (modFolder) {
@@ -229,8 +309,32 @@ export default function Browse() {
               )}
             </div>
 
+            {/* Log Content View */}
+            {logContent !== null && (
+              <>
+                <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-elevated)', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <FileLog size={12} style={{ display: 'inline', marginRight: '6px' }} />
+                  Log file — {logContent.split('\n').length} lines
+                </div>
+                <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                  {logLoading ? (
+                    <div style={{ textAlign: 'center', padding: '24px' }}>
+                      <Loader2 size={24} className="spin" color="var(--accent)" />
+                    </div>
+                  ) : (
+                    logContent.split('\n').map((line, i) => (
+                      <div key={i} style={{ marginBottom: '1px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{String(i + 1).padStart(4, ' ')}</span>{' '}
+                        {line}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+
             {/* Diff Summary Bar */}
-            {diff && (
+            {diff && !logContent && (
               <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: '16px', fontSize: '12px' }}>
                 <span style={{ color: 'var(--text-muted)' }}>Template: <strong style={{ color: 'var(--text-primary)' }}>{diff.summary.template_count}</strong> entities</span>
                 <span style={{ color: 'var(--text-muted)' }}>Module: <strong style={{ color: 'var(--text-primary)' }}>{diff.summary.module_count}</strong> entities</span>
@@ -239,73 +343,73 @@ export default function Browse() {
               </div>
             )}
 
-            {/* Create template message */}
-            {createTemplateMsg && (
+            {createTemplateMsg && !logContent && (
               <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--accent)' }}>
                 {createTemplateMsg}
               </div>
             )}
 
-            {/* Apply template message */}
-            {applyMsg && (
+            {applyMsg && !logContent && (
               <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--accent)' }}>
                 {applyMsg}
               </div>
             )}
 
             {/* DXF Canvas View */}
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', backgroundColor: 'var(--bg-primary)' }}>
-              {diffLoading ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Loader2 size={24} className="spin" color="var(--accent)" />
-                </div>
-              ) : diff ? (
-                <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-                  {/* Template View */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)' }}>
-                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
-                      Template
+            {!logContent && (
+              <div style={{ flex: 1, overflow: 'auto', display: 'flex', backgroundColor: 'var(--bg-primary)' }}>
+                {diffLoading ? (
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Loader2 size={24} className="spin" color="var(--accent)" />
+                  </div>
+                ) : diff ? (
+                  <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+                    {/* Template View */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)' }}>
+                      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
+                        {compareMode === 'mod' ? 'Fixed Template' : 'Template'}
+                      </div>
+                      <DXFCanvas entities={diff.template_entities} added={[]} removed={diff.removed} bbox={diff.bounding_box} />
                     </div>
-                    <DXFCanvas entities={diff.template_entities} added={[]} removed={diff.removed} bbox={diff.bounding_box} />
-                  </div>
-                  {/* Module View */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
-                      Module (with differences highlighted)
+                    {/* Module View */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
+                        Module (differences highlighted)
+                      </div>
+                      <DXFCanvas entities={diff.module_entities} added={diff.added} removed={[]} bbox={diff.bounding_box} highlightDiffs={true} />
                     </div>
-                    <DXFCanvas entities={diff.module_entities} added={diff.added} removed={[]} bbox={diff.bounding_box} highlightDiffs={true} />
                   </div>
-                </div>
-              ) : templatePath === null ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
-                  <AlertCircle size={32} color="var(--warning)" style={{ marginBottom: '8px' }} />
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '14px', textAlign: 'center', marginBottom: '12px' }}>
-                    No matching template found for this file.
-                  </p>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '16px' }}>
-                    This file is in a _modN folder, meaning it differs from the template.
-                    You can create a new template from this file, or apply it as a fixed template to the entire group.
-                  </p>
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    <button className="btn btn-primary" onClick={handleCreateTemplate}>
-                      <Plus size={14} />
-                      Create Template from this file
-                    </button>
+                ) : templatePath === null && selectedFile?.toLowerCase().endsWith('.dxf') ? (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                    <AlertCircle size={32} color="var(--warning)" style={{ marginBottom: '8px' }} />
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '14px', textAlign: 'center', marginBottom: '12px' }}>
+                      No matching template found for this file.
+                    </p>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '16px' }}>
+                      This file is in a _modN folder, meaning it differs from the template.
+                      You can create a new template from this file, or apply it as a fixed template to the entire group.
+                    </p>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <button className="btn btn-primary" onClick={handleCreateTemplate}>
+                        <Plus size={14} />
+                        Create Template from this file
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <p style={{ color: 'var(--text-muted)' }}>No diff data available.</p>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <p style={{ color: 'var(--text-muted)' }}>No diff data available.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
             <GitCompare size={32} color="var(--text-muted)" style={{ marginBottom: '8px' }} />
-            <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Select a DXF file from the tree to view the visual diff.</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Select a DXF file to view the visual diff</p>
             <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>
-              Template vs module comparison with highlighted differences.
+              Click on a .dxf file for side-by-side template comparison · Click on a .log file to read the detailed analysis
             </p>
             <button className="btn btn-secondary" style={{ marginTop: '16px' }} onClick={loadGroups}>
               <Layers size={14} />
@@ -333,22 +437,22 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
   if (!node.is_dir) {
     return (
       <div
-        onClick={() => isDXF && onFileClick(node.path, '')}
+        onClick={() => (isDXF || isLog) && onFileClick(node.path, '')}
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
           padding: '3px 8px',
           marginLeft: level * 16,
-          cursor: isDXF ? 'pointer' : 'default',
+          cursor: (isDXF || isLog) ? 'pointer' : 'default',
           fontSize: 12,
           fontFamily: 'var(--font-mono)',
-          color: selectedFile === node.path ? 'var(--accent)' : isDXF ? 'var(--text-primary)' : 'var(--text-muted)',
+          color: selectedFile === node.path ? 'var(--accent)' : isDXF || isLog ? 'var(--text-primary)' : 'var(--text-muted)',
           background: selectedFile === node.path ? 'rgba(0,138,0,0.08)' : 'transparent',
           borderRadius: 4,
         }}
       >
-        {isDXF ? <FileText size={12} color="var(--accent)" /> : <FileText size={12} color="var(--text-muted)" />}
+        {isDXF ? <FileText size={12} color="var(--accent)" /> : isLog ? <FileText size={12} color="var(--info)" /> : <FileText size={12} color="var(--text-muted)" />}
         <span>{node.name}</span>
         {isDXF && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>📐</span>}
         {isLog && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>📝</span>}

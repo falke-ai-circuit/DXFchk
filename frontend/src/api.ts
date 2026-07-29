@@ -13,6 +13,8 @@ export interface SettingsResponse {
   recursive: boolean;
   move_files: boolean;
   group_by_content: boolean;
+  auto_create_mod_templates: boolean;
+  auto_apply_to_group: boolean;
 }
 
 export interface Project {
@@ -296,4 +298,33 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
+
+  // Log content (read .log file)
+  getLogContent: (filePath: string) =>
+    apiFetch<{ content: string; lines: number }>(`/api/v1/log?path=${encodeURIComponent(filePath)}`),
+
+  // DXF raw content (read DXF file as text)
+  getDXFContent: (filePath: string) =>
+    apiFetch<{ content: string; lines: number }>(`/api/v1/dxf/content?path=${encodeURIComponent(filePath)}`),
+
+  // Edit DXF file (save modified content)
+  saveDXFContent: (filePath: string, content: string) =>
+    apiFetch<{ ok: boolean; message: string }>(`/api/v1/dxf/content`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, content }),
+    }),
+
+  // Apply edit script to template
+  applyEditScript: (templatePath: string, editScript: string, groupName: string, outputFolder?: string) =>
+    apiFetch<{ ok: boolean; message: string; modified: number }>('/api/v1/template/edit-script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_path: templatePath, edit_script: editScript, group_name: groupName, output_folder: outputFolder }),
+    }),
+
+  // Get template group details (with file list for apply)
+  getTemplateGroupDetail: (groupName: string, output?: string) =>
+    apiFetch<{ group: TemplateGroup | null }>(`/api/v1/template/group?name=${encodeURIComponent(groupName)}${output ? `&output=${encodeURIComponent(output)}` : ''}`),
+
 };
