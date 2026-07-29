@@ -198,7 +198,9 @@ export default function Dashboard() {
         <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
             <FolderCog size={18} color="var(--accent)" />
-            <span style={{ fontSize: '16px', fontWeight: 600 }}>{editingProject.name}</span>
+            <span style={{ fontSize: '16px', fontWeight: 600 }}>
+              {editingProject.id.toUpperCase()} — {editingProject.name}
+            </span>
             <span className="badge badge-success" style={{ marginLeft: 'auto' }}>Active</span>
           </div>
 
@@ -324,7 +326,9 @@ export default function Dashboard() {
               <Folder size={20} color={activeProject?.id === p.id ? 'var(--accent)' : 'var(--text-muted)'} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                    {p.id.toUpperCase()} — {p.name}
+                  </span>
                   {activeProject?.id === p.id && <span className="badge badge-success" style={{ fontSize: 9, padding: '1px 6px' }}>Active</span>}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
