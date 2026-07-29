@@ -190,8 +190,8 @@ export default function Compare() {
   const eta = cs?.eta || '--:--:--';
 
   return (
-    <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
-      <h1 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '24px' }}>Compare DXF Files</h1>
+    <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+      <h1 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '16px' }}>Compare DXF Files</h1>
 
       {/* Active project indicator */}
       {activeProject && (
@@ -212,135 +212,139 @@ export default function Compare() {
         </div>
       )}
 
-      {/* Folder Selection — matches Python GUI */}
-      <div className="card" style={{ marginBottom: '16px' }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <FolderOpen size={16} color="var(--accent)" />
-          Folder Selection
-        </h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div>
-            <label style={labelStyle}>Template Folder — contains original DXF templates</label>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={{ ...inputStyle, flex: 1 }} />
-              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('template')}>
-                <Search size={14} /> Browse
-              </button>
-            </div>
-          </div>
-          <div>
-            <label style={labelStyle}>Search Folder — contains DXF files to compare</label>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\search" style={{ ...inputStyle, flex: 1 }} />
-              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('search')}>
-                <Search size={14} /> Browse
-              </button>
-            </div>
-          </div>
-          <div>
-            <label style={labelStyle}>Output Folder — where results are saved</label>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
-              Identical files → template folders · Different files → _mod folders · No template → 'notemplate' folder
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={{ ...inputStyle, flex: 1 }} />
-              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('output')}>
-                <Search size={14} /> Browse
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Options — matches Python GUI checkboxes */}
-      <div className="card" style={{ marginBottom: '16px' }}>
-        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Options</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Search Subdirectories</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— search recursively in all subfolders</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={groupByContent} onChange={(e) => setGroupByContent(e.target.checked)} />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Group by Content Differences</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— different files grouped into _modN folders by content hash</span>
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input type="checkbox" checked={moveFiles} onChange={(e) => setMoveFiles(e.target.checked)} />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Move files to output</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— original files in search folder are preserved when unchecked</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Action Buttons — Start, Stop, Resume, Reset */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <button className="btn btn-primary" onClick={handleStart} disabled={scanning || comparing || stopping}>
-          {scanning ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-          {scanning ? 'Scanning Templates...' : comparing ? 'Comparing...' : 'Start'}
-        </button>
-        <button className="btn btn-danger" onClick={handleStop} disabled={!comparing || stopping}>
-          {stopping ? <Loader2 size={16} className="spin" /> : <Square size={16} />}
-          {stopping ? 'Stopping...' : 'Stop'}
-        </button>
-        {hasSession && !comparing && (
-          <button className="btn btn-primary" onClick={handleResume} disabled={resuming}>
-            {resuming ? <Loader2 size={16} className="spin" /> : <Pause size={16} />}
-            {resuming ? 'Resuming...' : 'Resume'}
-          </button>
-        )}
-        <button className="btn btn-secondary" onClick={handleReset} disabled={comparing || stopping}>
-          <RotateCcw size={16} />
-          Reset Session
-        </button>
-      </div>
-
-      {/* Timing Bar */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-        <TimingCard icon={<Clock size={14} />} label="Elapsed" value={elapsedTime} active={cs?.running ?? false} />
-        <TimingCard icon={<Timer size={14} />} label="ETA" value={eta} active={cs?.running ?? false} />
-        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px' }}>
-          <div style={{ color: 'var(--accent)', display: 'flex', alignItems: 'center' }}><ScanLine size={16} /></div>
-          <div>
-            <div style={{ fontSize: '18px', fontWeight: 700 }}>{templateCount}</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Templates Loaded</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Progress Section */}
-      <div style={{ marginBottom: '16px' }}>
-        <ProgressCard title="Comparison" icon={<GitCompareArrows size={14} />} progress={progress} label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'} active={cs?.running ?? false} />
-      </div>
-
-      {/* Summary Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '16px' }}>
-        <MiniStat icon={<FileCheck size={16} />} label="Matched" value={matched} color="var(--success)" />
-        <MiniStat icon={<FileDiff size={16} />} label="Different" value={different} color="var(--warning)" />
-        <MiniStat icon={<FileQuestion size={16} />} label="No Template" value={noTemplate} color="var(--text-muted)" />
-      </div>
-
-      {/* Live Log — matches Python GUI log section */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-          <Activity size={16} color="var(--accent)" />
-          <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Live Log</h2>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
-            {logs.length} entries
-          </span>
-        </div>
-        <div style={{ padding: '12px 16px', maxHeight: '400px', overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-          {logs.length === 0 ? (
-            <span style={{ color: 'var(--text-muted)' }}>No logs yet. Start a comparison to see real-time output.</span>
-          ) : (
-            logs.map((line, i) => (
-              <div key={i} style={{ marginBottom: '2px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>{String(i + 1).padStart(4, ' ')}</span>{' '}
-                {line}
+      {/* Two-column layout: controls left, measurements+log right */}
+      <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+        {/* Left Column — Controls */}
+        <div style={{ flex: '0 0 520px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Folder Selection */}
+          <div className="card">
+            <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FolderOpen size={16} color="var(--accent)" />
+              Folder Selection
+            </h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={labelStyle}>Template Folder — contains original DXF templates</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={{ ...inputStyle, flex: 1 }} />
+                  <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('template')}>
+                    <Search size={14} /> Browse
+                  </button>
+                </div>
               </div>
-            ))
-          )}
+              <div>
+                <label style={labelStyle}>Search Folder — contains DXF files to compare</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\search" style={{ ...inputStyle, flex: 1 }} />
+                  <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('search')}>
+                    <Search size={14} /> Browse
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>Output Folder — where results are saved</label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
+                  Identical → template folders · Different → _mod folders · No template → 'notemplate'
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={{ ...inputStyle, flex: 1 }} />
+                  <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('output')}>
+                    <Search size={14} /> Browse
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Options */}
+          <div className="card">
+            <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Options</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} />
+                <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Search Subdirectories</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={groupByContent} onChange={(e) => setGroupByContent(e.target.checked)} />
+                <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Group by Content Differences</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={moveFiles} onChange={(e) => setMoveFiles(e.target.checked)} />
+                <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Move files to output</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={handleStart} disabled={scanning || comparing || stopping}>
+              {scanning ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
+              {scanning ? 'Scanning...' : comparing ? 'Comparing...' : 'Start'}
+            </button>
+            <button className="btn btn-danger" onClick={handleStop} disabled={!comparing || stopping}>
+              {stopping ? <Loader2 size={16} className="spin" /> : <Square size={16} />}
+              {stopping ? 'Stopping...' : 'Stop'}
+            </button>
+            {hasSession && !comparing && (
+              <button className="btn btn-primary" onClick={handleResume} disabled={resuming}>
+                {resuming ? <Loader2 size={16} className="spin" /> : <Pause size={16} />}
+                {resuming ? 'Resuming...' : 'Resume'}
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={handleReset} disabled={comparing || stopping}>
+              <RotateCcw size={16} />
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Right Column — Measurements + Live Log */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
+          {/* Timing + Templates row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+            <TimingCard icon={<Clock size={14} />} label="Elapsed" value={elapsedTime} active={cs?.running ?? false} />
+            <TimingCard icon={<Timer size={14} />} label="ETA" value={eta} active={cs?.running ?? false} />
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px' }}>
+              <div style={{ color: 'var(--accent)', display: 'flex', alignItems: 'center' }}><ScanLine size={16} /></div>
+              <div>
+                <div style={{ fontSize: '18px', fontWeight: 700 }}>{templateCount}</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Templates</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <ProgressCard title="Comparison" icon={<GitCompareArrows size={14} />} progress={progress} label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'} active={cs?.running ?? false} />
+
+          {/* Summary Stats */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+            <MiniStat icon={<FileCheck size={16} />} label="Matched" value={matched} color="var(--success)" />
+            <MiniStat icon={<FileDiff size={16} />} label="Different" value={different} color="var(--warning)" />
+            <MiniStat icon={<FileQuestion size={16} />} label="No Template" value={noTemplate} color="var(--text-muted)" />
+          </div>
+
+          {/* Live Log */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden', flex: 1, minHeight: '300px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', flexShrink: 0 }}>
+              <Activity size={16} color="var(--accent)" />
+              <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Live Log</h2>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
+                {logs.length} entries
+              </span>
+            </div>
+            <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6, maxHeight: '400px' }}>
+              {logs.length === 0 ? (
+                <span style={{ color: 'var(--text-muted)' }}>No logs yet. Start a comparison to see real-time output.</span>
+              ) : (
+                logs.map((line, i) => (
+                  <div key={i} style={{ marginBottom: '2px' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{String(i + 1).padStart(4, ' ')}</span>{' '}
+                    {line}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
 

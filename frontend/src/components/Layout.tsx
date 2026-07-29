@@ -40,22 +40,7 @@ export default function Layout() {
             marginRight: '8px',
           }}
         >
-          {/* Valmet-style logo: green circle with V */}
-          <div style={{
-            width: 24,
-            height: 24,
-            borderRadius: '50%',
-            backgroundColor: 'var(--accent)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '14px',
-            fontWeight: 900,
-            color: '#fff',
-            fontFamily: 'var(--font-sans)',
-          }}>
-            V
-          </div>
+          <img src="/valmet-logo.png" alt="Valmet" style={{ height: 20, width: 'auto' }} />
           <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
             DXFchk
           </span>
