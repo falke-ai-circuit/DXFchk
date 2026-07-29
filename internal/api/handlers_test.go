@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // helper to create a test server with a temp projects file
@@ -216,7 +217,7 @@ func TestCompareStartAndStatus(t *testing.T) {
 	// Check status (the comparison should have completed quickly for 1 file)
 	// We may need to poll a few times since it runs in a goroutine
 	var status map[string]any
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 100; i++ {
 		w = doRequest(t, s, "GET", "/api/v1/compare/status?project_id=test-job-1", "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("compare status: expected 200, got %d", w.Code)
@@ -225,6 +226,7 @@ func TestCompareStartAndStatus(t *testing.T) {
 		if status["running"] == false {
 			break
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if status["running"] == true {
@@ -235,14 +237,16 @@ func TestCompareStartAndStatus(t *testing.T) {
 	resultsCount, _ := status["results_count"].(float64)
 	if resultsCount < 1 {
 		// Check if it completed — give it more time
-		for i := 0; i < 50; i++ {
+		for i := 0; i < 100; i++ {
 			w = doRequest(t, s, "GET", "/api/v1/compare/status?project_id=test-job-1", "")
 			status = decodeJSON(t, w)
-			if status["running"] == false && status["results_count"].(float64) > 0 {
+			rc, _ := status["results_count"].(float64)
+			if status["running"] == false && rc > 0 {
+				resultsCount = rc
 				break
 			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		resultsCount, _ = status["results_count"].(float64)
 		if resultsCount < 1 {
 			t.Errorf("expected results_count >= 1, got %v", status["results_count"])
 		}
