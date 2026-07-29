@@ -30,4 +30,4 @@ __pycache__/
 Thumbs.db
 
 # Data directory (runtime)
-dxfchk-data/
+dxfchk-data/dxfchk_local
