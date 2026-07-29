@@ -301,7 +301,9 @@ func collectEntityPairs(pairs []CodePair, i *int) []CodePair {
 	var result []CodePair
 	for *i < len(pairs) {
 		if pairs[*i].Code == 0 {
-			*i-- // back up so the main loop sees the code=0
+			// Leave i at the next code=0 entity. The caller's i-- + for-loop i++
+			// will land here. Do NOT i-- — that backs up to the current entity
+			// when it has no data pairs, causing an infinite loop (e.g. SEQEND).
 			break
 		}
 		result = append(result, pairs[*i])

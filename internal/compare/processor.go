@@ -928,9 +928,13 @@ func (c *ComparisonProcessor) saveDetailedLogs() {
 			}
 			folderPath := filepath.Join(c.OutputFolder, folderName)
 			os.MkdirAll(folderPath, 0755)
-			logPath := filepath.Join(folderPath, fmt.Sprintf("%s_dxfanalyze.log", folderName))
+			// Use only the last path component for the log filename to avoid
+			// creating nested subfolders (folderName may contain slashes like
+			// "BI001/BI001_mod1")
+			logBaseName := filepath.Base(folderName)
+			logPath := filepath.Join(folderPath, fmt.Sprintf("%s_dxfanalyze.log", logBaseName))
 			var logContent strings.Builder
-			logContent.WriteString(fmt.Sprintf("DETAILED COMPARISON LOG FOR: %s\n", folderName))
+			logContent.WriteString(fmt.Sprintf("DETAILED COMPARISON LOG FOR: %s\n", logBaseName))
 			logContent.WriteString(fmt.Sprintf("Created: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 			logContent.WriteString(fmt.Sprintf("Number of files compared: %d\n", len(folderLogContents)))
 			logContent.WriteString("=============================================\n\n")
