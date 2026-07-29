@@ -89,6 +89,11 @@ export default function Dashboard() {
 
   const handleSelect = async (id: string) => {
     await selectProject(id);
+    // Also open edit modal so user can adjust folders
+    const proj = projects.find(p => p.id === id);
+    if (proj) {
+      setEditingProject({ ...proj });
+    }
   };
 
   const handleExport = (id: string, e: React.MouseEvent) => {
