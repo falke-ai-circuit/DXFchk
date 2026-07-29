@@ -265,10 +265,29 @@ func extractFromDrawing(drawing *dxf.Drawing) []*DiffEntity {
 			}
 			// Extract ATTRIB entities (block attributes — terminal names, values, formulas)
 			for _, att := range ent.Attribs {
+				// Check invisible flag (code 70 bit 0x80 = invisible) — skip invisible ATTRIBs
+				attFlags := att.GetIntValue(70)
+				if attFlags&0x80 != 0 {
+					continue
+				}
 				attTag := att.GetStringValue(2)
 				attText := stripMTextFormatting(att.GetStringValue(1))
 				if attText == "" {
 					continue
+				}
+				// Skip structural label markers (not user-visible in CAD)
+				attTagUpper := strings.ToUpper(attTag)
+				if attTagUpper == "LABEL_UP" || attTagUpper == "LABEL_RIGHT" ||
+					attTagUpper == "LABEL_DOWN" || attTagUpper == "LABEL_LEFT" {
+					continue
+				}
+				// Skip ATTRIBs where tag looks like a coordinate or internal code
+				// (tags like "0,0@0" or "0,100.0" are coordinate echoes, not labels)
+				if strings.HasPrefix(attTag, "0,") || strings.HasPrefix(attText, "0,") {
+					// Allow if the text looks like a real value (has letters)
+					if !containsLetter(attText) && !containsLetter(attTag) {
+						continue
+					}
 				}
 				ax := att.GetFloatValue(10)
 				ay := att.GetFloatValue(20)
@@ -549,6 +568,16 @@ func hasCode(pairs []dxf.CodePair, code int) bool {
 func parseFloatStr(s string) float64 {
 	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	return v
+}
+
+// containsLetter checks if a string contains any ASCII letter
+func containsLetter(s string) bool {
+	for _, c := range s {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 // stripMTextFormatting removes MTEXT formatting codes from text strings
