@@ -331,14 +331,6 @@ export default function DXFViewer({
             </g>
             {/* ATTRIB text labels — rendered at WORLD coordinates, OUTSIDE the INSERT transform */}
             {e.attribs?.map((att, ai) => renderAttrib(att, i * 10000 + ai))}
-            {/* Block name label — at world coordinates, readable size */}
-            {e.block_name && (
-              <text x={ix + 3} y={iy - 3} fill={color}
-                fontSize={Math.max(3, 8 / zoom)}
-                fontFamily="monospace" opacity={0.8}>
-                {e.block_name}
-              </text>
-            )}
           </g>
         );
       }
