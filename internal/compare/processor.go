@@ -2,11 +2,12 @@ package compare
 
 import (
 	"crypto/md5"
-	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -980,22 +981,149 @@ func extractContent(path string) (*dxf.DXFContent, error) {
 	return drawing.ExtractContent(3), nil
 }
 
-// ContentHash creates an MD5 hash from DXF content data
-// Port of Python create_content_hash
-func ContentHash(content *dxf.DXFContent) string {
-	data, err := json.Marshal(struct {
-		Blocks    map[string][][3]float64     `json:"blocks"`
-		Lines     map[string][][2][3]float64  `json:"lines"`
-		Polylines map[string][][][3]float64    `json:"polylines"`
-	}{
-		Blocks:    content.Blocks,
-		Lines:     content.Lines,
-		Polylines: content.Polylines,
-	})
-	if err != nil {
-		return ""
+// pythonFloat formats a float64 like Python's json.dumps would
+// Python always includes a decimal point: 1.0 not 1, 0.0 not 0
+func pythonFloat(f float64) string {
+	if f == math.Trunc(f) && !math.IsInf(f, 0) && !math.IsNaN(f) {
+		return fmt.Sprintf("%.1f", f) // 1.0, 0.0, 42.0
 	}
-	return fmt.Sprintf("%x", md5.Sum(data))
+	// For non-integers, use repr-like formatting (Python uses str(float))
+	// json.dumps uses float.__repr__ which gives shortest representation
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// pythonJSON serializes DXF content to match Python's json.dumps([blocks, lines, polylines], sort_keys=True)
+// This is critical for content hash compatibility — the hash must match exactly
+func pythonJSON(blocks map[string][][3]float64, lines map[string][][2][3]float64, polylines map[string][][][3]float64) string {
+	var sb strings.Builder
+	sb.WriteByte('[')
+	sb.WriteString(pythonJSONBlocks(blocks))
+	sb.WriteString(", ")
+	sb.WriteString(pythonJSONLines(lines))
+	sb.WriteString(", ")
+	sb.WriteString(pythonJSONPolylines(polylines))
+	sb.WriteByte(']')
+	return sb.String()
+}
+
+func pythonJSONBlocks(m map[string][][3]float64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(strconv.Quote(k))
+		sb.WriteString(": ")
+		sb.WriteByte('[')
+		for j, v := range m[k] {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("[")
+			sb.WriteString(pythonFloat(v[0]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(v[1]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(v[2]))
+			sb.WriteString("]")
+		}
+		sb.WriteByte(']')
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+func pythonJSONLines(m map[string][][2][3]float64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(strconv.Quote(k))
+		sb.WriteString(": ")
+		sb.WriteByte('[')
+		for j, pair := range m[k] {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("[[")
+			sb.WriteString(pythonFloat(pair[0][0]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(pair[0][1]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(pair[0][2]))
+			sb.WriteString("], [")
+			sb.WriteString(pythonFloat(pair[1][0]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(pair[1][1]))
+			sb.WriteString(", ")
+			sb.WriteString(pythonFloat(pair[1][2]))
+			sb.WriteString("]]")
+		}
+		sb.WriteByte(']')
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+func pythonJSONPolylines(m map[string][][][3]float64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(strconv.Quote(k))
+		sb.WriteString(": ")
+		sb.WriteByte('[')
+		for j, poly := range m[k] {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteByte('[')
+			for l, v := range poly {
+				if l > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString("[")
+				sb.WriteString(pythonFloat(v[0]))
+				sb.WriteString(", ")
+				sb.WriteString(pythonFloat(v[1]))
+				sb.WriteString(", ")
+				sb.WriteString(pythonFloat(v[2]))
+				sb.WriteString("]")
+			}
+			sb.WriteByte(']')
+		}
+		sb.WriteByte(']')
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+// ContentHash creates an MD5 hash from DXF content data
+// Must match Python: json.dumps([blocks_dict, lines_dict, polylines_dict], sort_keys=True)
+// where blocks_dict = {"block_name": [(x,y,z), ...], ...}
+func ContentHash(content *dxf.DXFContent) string {
+	contentStr := pythonJSON(content.Blocks, content.Lines, content.Polylines)
+	return fmt.Sprintf("%x", md5.Sum([]byte(contentStr)))
 }
 
 func sanitizeFilename(name string) string {

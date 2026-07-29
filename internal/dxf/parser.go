@@ -68,7 +68,8 @@ func ReadFromReader(r io.Reader) (*Drawing, error) {
 func parsePairs(pairs []CodePair) *Drawing {
 	d := &Drawing{}
 	var currentEntity *Entity
-	var currentInsert *Entity // track INSERT for ATTRIB collection
+	var currentInsert *Entity    // track INSERT for ATTRIB collection
+	var currentPolyline *Entity  // track POLYLINE for VERTEX collection
 	inEntities := false
 
 	for i := 0; i < len(pairs); i++ {
@@ -104,12 +105,30 @@ func parsePairs(pairs []CodePair) *Drawing {
 				currentInsert = nil
 			}
 
+			// If we were collecting VERTEXes for a POLYLINE, check if done
+			if currentPolyline != nil && entityType != "VERTEX" {
+				currentPolyline = nil
+			}
+
 			if entityType == "ATTRIB" && currentInsert != nil {
 				// This ATTRIB belongs to the current INSERT
 				attrib := Entity{Type: "ATTRIB"}
 				attrib.Pairs = collectEntityPairs(pairs, &i)
 				currentInsert.Attribs = append(currentInsert.Attribs, attrib)
 				i-- // adjust for loop increment
+			} else if entityType == "VERTEX" && currentPolyline != nil {
+				// This VERTEX belongs to the current POLYLINE
+				// Append its coordinate pairs to the POLYLINE's pairs
+				vertexPairs := collectEntityPairs(pairs, &i)
+				currentPolyline.Pairs = append(currentPolyline.Pairs, vertexPairs...)
+				i-- // adjust for loop increment
+			} else if entityType == "SEQEND" {
+				// End of POLYLINE/INSERT sequence — skip this entity
+				collectEntityPairs(pairs, &i)
+				i--
+				if currentPolyline != nil {
+					currentPolyline = nil
+				}
 			} else {
 				// New entity
 				currentEntity = &Entity{Type: entityType}
@@ -130,11 +149,16 @@ func parsePairs(pairs []CodePair) *Drawing {
 						}
 					}
 					if hasAttribs {
-							currentInsert = &d.Entities[len(d.Entities)-1]
-						}
+						currentInsert = &d.Entities[len(d.Entities)-1]
 					}
-					}
-					}
+				}
+
+				if entityType == "POLYLINE" {
+					// Track this POLYLINE to collect subsequent VERTEX entities
+					currentPolyline = &d.Entities[len(d.Entities)-1]
+				}
+			}
+		}
 	}
 
 	return d

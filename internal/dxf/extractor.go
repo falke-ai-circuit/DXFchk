@@ -92,13 +92,39 @@ func (d *Drawing) ExtractContent(decimals int) *DXFContent {
 
 		case "POLYLINE":
 			layer := e.GetStringValue(8)
-			// POLYLINE vertices come from following VERTEX entities
+			// POLYLINE entities have a header with codes 10/20/30 for the origin point
+			// (usually 0,0,0), followed by VERTEX entities with actual vertex coordinates.
+			// The parser collects VERTEX pairs into the POLYLINE's Pairs, so we need to
+			// skip the header's 10/20/30 and only process the VERTEX 10/20/30 triples.
 			var vertices [][3]float64
+			var curX, curY, curZ float64
+			vertexCount := 0
+			headerOriginSkipped := false
 			for _, p := range e.Pairs {
-				if p.Code == 10 {
-					x := round(parseFloat(p.Value))
-					// Look ahead for matching 20
-					vertices = append(vertices, [3]float64{x, 0, 0})
+				switch p.Code {
+				case 10:
+					curX = round(parseFloat(p.Value))
+				case 20:
+					curY = round(parseFloat(p.Value))
+				case 30:
+					curZ = round(parseFloat(p.Value))
+					if !headerOriginSkipped {
+						// Skip the first 10/20/30 triple (POLYLINE header origin, usually 0,0,0)
+						headerOriginSkipped = true
+					} else {
+						vertices = append(vertices, [3]float64{curX, curY, curZ})
+						vertexCount++
+					}
+				}
+			}
+			// If no vertices were found (no 30 codes after header), try without skipping
+			if vertexCount == 0 {
+				vertices = vertices[:0]
+				for _, p := range e.Pairs {
+					if p.Code == 10 {
+						curX = round(parseFloat(p.Value))
+						vertices = append(vertices, [3]float64{curX, 0.0, 0.0})
+					}
 				}
 			}
 			normalized := normalizeVertices(vertices)
