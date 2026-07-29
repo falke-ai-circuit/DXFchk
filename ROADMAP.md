@@ -1,118 +1,72 @@
-# ROADMAP — DXFchk v0.1.0
+# ROADMAP — DXFchk v0.6.7
 
 ## Phase Overview
 
 | Phase | Scope | Deliverable | Status |
 |-------|-------|-------------|--------|
 | **1** | DXF Parser + Core Logic | Native parser, extractor, comparison engine | ✅ Complete |
-| **2** | REST API + Server | HTTP server, handlers, SQLite database | ⏳ Pending |
-| **3** | React Frontend | Vite + React + TypeScript UI, embedded in Go binary | ⏳ Pending |
-| **4** | Visual Diff | DXF entity rendering, difference highlighting | ⏳ Pending |
-| **5** | Export + Polish | ZIP export, settings persistence, error handling | ⏳ Pending |
+| **2** | REST API + Server | HTTP server, handlers, project store | ✅ Complete |
+| **3** | React Frontend | Vite + React + TypeScript UI, embedded in Go binary | ✅ Complete |
+| **4** | Visual Diff + CAD Rendering | DXF entity rendering, difference highlighting | ✅ Complete |
+| **5** | Parallel Processing + Polish | JobManager, 4-worker pool, global status bar, template workflow | ✅ Complete |
 
 ---
 
 ## Phase 1 — DXF Parser + Core Logic ✅
 
-### 1.1: Native DXF Parser
-- `internal/dxf/parser.go` — parse DXF text format, extract sections and entities
-- `internal/dxf/extractor.go` — extract blocks (INSERT positions), lines (sorted endpoints), polylines (normalized vertices)
-- Coordinate rounding to N decimal places
-- Zero external dependencies (Go stdlib only)
-- ✅ Complete
-
-### 1.2: Comparison Engine
+- `internal/dxf/parser.go` — native DXF text parser, entity/section extraction, layer/block definitions
+- `internal/dxf/extractor.go` — blocks (INSERT positions), lines (sorted endpoints), polylines (normalized vertices)
 - `internal/compare/template.go` — `$(TEMPLATE)` extraction, template map building
 - `internal/compare/processor.go` — full ComparisonProcessor ported from Python
 - Content hashing (MD5 of JSON-serialized geometry)
 - `_modN` folder creation and file grouping
-- ✅ Complete
+- `cmd/debug_hash/` — debug utility
 
-### 1.3: Test Utility
-- `cmd/test_parse/main.go` — CLI tool to test parser on sample DXF files
-- ✅ Complete
+## Phase 2 — REST API + Server ✅
 
-## Phase 2 — REST API + Server ⏳
+- `cmd/dxfchk/main.go` — HTTP server + CLI mode
+- `internal/api/server.go` — Go 1.22+ ServeMux with method patterns, 30+ routes
+- `internal/api/handlers.go` — health, settings, compare, results, session
+- `internal/api/projects.go` — project CRUD (JSON store at `~/.dxfchk/projects.json`)
+- `internal/api/session.go` — session state persistence
+- CLI mode for headless comparison
 
-### 2.1: HTTP Server
-- `cmd/dxfchk/main.go` — main entry point with flags (--port, --db-path, --log-level)
-- `internal/api/server.go` — HTTP server, routing, middleware (CORS, logging)
-- `internal/api/handlers.go` — REST API handlers for all endpoints
-- Health check endpoint
+## Phase 3 — React Frontend ✅
 
-### 2.2: SQLite Database
-- `internal/db/database.go` — SQLite connection + migrations
-- `internal/db/models.go` — data models (Module, Template, Settings)
-- Store comparison results, template maps, settings
+- `frontend/` — Vite + React + TypeScript
+- Pages: Dashboard, Compare, Browse, Edit, Settings
+- Components: DXFViewer, Layout (with GlobalStatusBar), FolderBrowser
+- Valmet green dark industrial theme (#008a00)
+- Embedded in Go binary via `//go:embed frontend_dist`
+- `frontend/src/store.ts` — Zustand state management
 
-### 2.3: API Endpoints
-- `GET /api/v1/health` — health check
-- `GET /api/v1/settings` — get current settings
-- `POST /api/v1/settings` — update settings
-- `POST /api/v1/templates/scan` — scan template folder
-- `GET /api/v1/templates` — get template map
-- `POST /api/v1/compare` — run comparison
-- `GET /api/v1/compare/status` — comparison progress
-- `GET /api/v1/results` — comparison results
-- `GET /api/v1/results/{template}/files` — files in template folder
-- `GET /api/v1/results/{template}/log` — comparison log
+## Phase 4 — Visual Diff + CAD Rendering ✅
 
-## Phase 3 — React Frontend ⏳
+- `frontend/src/components/DXFViewer.tsx` — canvas-based CAD renderer
+- ACI color index support (0-255), ByLayer resolution
+- Entity rendering: LINE, LWPOLYLINE (bulge arcs), POLYLINE, INSERT (block geometry), TEXT/MTEXT, CIRCLE, ARC, POINT
+- ATTRIB rendering with text alignment, rotation, height
+- Diff highlighting: red=added, orange=removed (single-view, v0.6.6)
+- `internal/api/diff.go` — entity extraction, diff computation, bounding box
+- Zoom, pan, grid overlay
 
-### 3.1: Project Setup
-- `web/` — Vite + React + TypeScript project
-- Valmet green theme (#008a00 primary, #1a1a1a dark background, #00ff41 accent)
-- Lucide React icons
-- API client (`web/src/api/client.ts`)
+## Phase 5 — Parallel Processing + Polish ✅
 
-### 3.2: Components
-- `Layout.tsx` — main layout (sidebar + content)
-- `FolderSelect.tsx` — template/search/output folder selection + options
-- `ComparisonRun.tsx` — start comparison, progress bar, live log feed
-- `ResultsView.tsx` — tree view: templates → `_modN` subfolders → files
-- `LogView.tsx` — detailed comparison logs per template
-
-### 3.3: Build + Embed
-- `embed.go` — `//go:embed` directive for `web/dist/`
-- Build frontend, embed in Go binary
-- Single-binary deployment
-
-## Phase 4 — Visual Diff ⏳
-
-### 4.1: DXF Entity Rendering
-- Canvas/SVG rendering of DXF geometry (blocks, lines, polylines)
-- Side-by-side view: template vs module
-- Zoom, pan, entity selection
-
-### 4.2: Difference Highlighting
-- Color-coded overlay: green=common, red=only in module, blue=only in template
-- Entity-level diff (added/removed/modified)
-- Coordinate-level diff for modified entities
-
-## Phase 5 — Export + Polish ⏳
-
-### 5.1: Export
-- ZIP export of results (modified files organized by `_modN`)
-- Export comparison log as PDF/CSV
-- Export summary report
-
-### 5.2: Polish
-- Settings persistence (SQLite)
-- Error handling and edge cases
-- Progress reporting (SSE or polling)
-- Keyboard shortcuts
-- Responsive design
+- `internal/api/jobs.go` — JobManager for multiple concurrent comparison jobs
+- `internal/compare/parallel.go` — 4-worker pool, two-phase (parallel read / sequential write)
+- GlobalStatusBar — always-on bottom bar, polls /compare/jobs every 2s
+- Template group workflow ("fix 90 templates instead of 1500 files")
+- Template apply, edit scripts, template creation from mod files
+- Compare stop/resume with session persistence
+- ZIP export/import for projects
+- System folder browser dialog
 
 ---
 
-## Timeline
+## Future Considerations
 
-| Phase | Est. Time | Status |
-|-------|-----------|--------|
-| 1 | Done | ✅ Complete |
-| 2 | 1-2 turns | ⏳ Pending |
-| 3 | 2-3 turns | ⏳ Pending |
-| 4 | 1-2 turns | ⏳ Pending |
-| 5 | 1 turn | ⏳ Pending |
-
-**v0.1.0 delivered: native DXF parser, comparison engine, test utility. Ready for Phase 2 (REST API).**
+- Per-group re-comparison (only re-run comparison for one template group)
+- Batch template editing (apply edit scripts across multiple groups)
+- PDF/CSV export of comparison reports
+- Keyboard shortcuts
+- Responsive design for tablet/mobile

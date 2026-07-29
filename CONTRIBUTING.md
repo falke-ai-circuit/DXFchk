@@ -4,47 +4,49 @@
 
 ### Branch Strategy
 - `main` — production-ready code, always builds, always passes tests
-- `feature/*` — new features (e.g., `feature/api-server`, `feature/frontend`)
-- `fix/*` — bug fixes (e.g., `fix/parser-entities`)
+- `feature/*` — new features (e.g., `feature/parallel-processing`, `feature/template-groups`)
+- `fix/*` — bug fixes (e.g., `fix/collectentitypairs-loop`, `fix/mod-log-path`)
 - Branch from `main`, rebase before merge, delete after merge
 
 ### Versioning (Semantic Versioning)
-- Format: `vMAJOR.MINOR.PATCH` (e.g., `v0.1.0`)
+- Format: `vMAJOR.MINOR.PATCH` (e.g., `v0.6.7`)
 - MAJOR: breaking API changes
 - MINOR: new features, new endpoints, backward-compatible
 - PATCH: bug fixes, UI improvements, no new functionality
-- Version bump happens in `cmd/dxfchk/main.go` (`version` const, injected via `-ldflags`)
-- Tag the release: `git tag v0.1.0 && git push origin v0.1.0`
+- Version injected via `-ldflags "-X main.cliVersion=v0.6.7"`
+- Tag the release: `git tag v0.6.7 && git push origin v0.6.7`
 
 ### Commit Conventions (Conventional Commits)
 ```
 <type>(<scope>): <description>
 
 type:    feat | fix | docs | refactor | test | chore | build | ci
-scope:   parser | compare | api | db | web | ui | docs
+scope:   parser | compare | api | frontend | ui | docs | dxf
 ```
 
 Examples:
-- `feat(parser): add CIRCLE entity support to DXF parser`
-- `fix(compare): correct content hash for empty polylines`
-- `feat(api): add comparison status endpoint with SSE`
-- `docs: update README with API endpoint list`
+- `feat(compare): add 4-worker parallel processing pool`
+- `fix(dxf): correct collectEntityPairs infinite loop on SEQEND`
+- `feat(ui): LOGReport-style dashboard with inline project settings`
+- `docs: update README to v0.6.7`
 
 ### Before Every Commit
 1. `go build ./...` — must compile clean
-2. `go test ./internal/...` — all tests pass (use `-race` for CI)
-3. `cd web && npm run build` — frontend builds clean (when available)
-4. `git diff --cached` — review staged changes for scope creep
-5. No commented-out code, no debug `fmt.Println`, no TODO without issue ref
+2. `go vet ./...` — must pass
+3. `go test ./internal/...` — all tests pass (use `-race` for CI)
+4. `cd frontend && npx tsc --noEmit` — frontend type check passes
+5. `git diff --cached` — review staged changes for scope creep
+6. No commented-out code, no debug `fmt.Println`, no TODO without issue ref
 
 ### Before Every Push (Pre-Push Checklist)
 1. All tests pass
-2. Frontend built and embedded in server binary (when available)
-3. CHANGELOG.md updated with version bump entry
-4. If new endpoints added: update README.md API table
-5. If new config flags: update `--help` output and README
-6. Delegate to architect for design docs, README updates, and repo knowledge updates
-7. `git push origin main` (or feature branch)
+2. **Frontend built and copied to embed directory** — `cd frontend && npm run build && cp -r dist/* ../internal/api/frontend_dist/`
+3. **Rebuild Go binary AFTER frontend** — stale `//go:embed` = stale UI
+4. CHANGELOG.md updated with version bump entry
+5. If new endpoints added: update README.md API table
+6. If new config flags: update `--help` output and README
+7. Delegate to architect for design docs, README updates, and repo knowledge updates
+8. `git push origin main` (or feature branch)
 
 ### Architect Delegation (Before Push)
 When changes affect any of these surfaces, delegate to architect before pushing:
@@ -56,37 +58,38 @@ When changes affect any of these surfaces, delegate to architect before pushing:
 
 ### File Organization
 ```
-cmd/dxfchk/         — server entry point, flags, wiring (Phase 2)
-cmd/test_parse/      — parser test utility
-internal/dxf/        — DXF parser + extractor
-internal/compare/    — comparison engine (processor, template, diff, hash)
-internal/api/        — HTTP handlers, REST API (Phase 2)
-internal/db/         — SQLite database (Phase 2)
-internal/config/     — app configuration (Phase 2)
-web/                 — React frontend (Phase 3)
+cmd/dxfchk/              — server entry point + CLI mode, flags, wiring
+cmd/debug_hash/          — content hashing debug utility
+internal/dxf/            — DXF parser + extractor
+internal/compare/        — comparison engine (processor, parallel, template)
+internal/api/            — HTTP server, REST API, project store, session, browse, diff
+frontend/src/            — React frontend (pages, components, api, store, styles)
+internal/api/frontend_dist/ — embedded built frontend (from frontend/dist/)
 reference-python-source/ — original Python source (reference only, not built)
-embed.go             — go:embed directive for web/dist/ (Phase 3)
 ```
 
-### Frontend Build (Phase 3)
-- Source: `web/src/` (TypeScript + React)
-- Build: `cd web && npm run build` → outputs to `web/dist/`
-- Embedded into Go binary via `//go:embed all:web/dist` in `embed.go`
+### Frontend Build
+- Source: `frontend/src/` (TypeScript + React + Vite)
+- Build: `cd frontend && npm run build` → outputs to `frontend/dist/`
+- Copy to embed: `cp -r frontend/dist/* internal/api/frontend_dist/`
+- Embedded into Go binary via `//go:embed frontend_dist` in `internal/api/server.go`
 - **Always rebuild frontend before rebuilding server** — stale embed = stale UI
+- Verify JS hash changed after rebuild (check `frontend/dist/assets/*.js` filename)
 
 ### Testing
 - Unit tests: `go test ./internal/...` (with `-race` flag)
 - Parser tests: `go run ./cmd/test_parse/ <dxf-file>` — verify extraction on real DXF files
-- Integration tests: `go test ./internal/... -run Integration`
-- Frontend: `cd web && npx tsc --noEmit` (type check)
+- Frontend type check: `cd frontend && npx tsc --noEmit`
+- Integration test: start server, curl health endpoint, run comparison
+- Browser testing: visual verification of all pages through browser
 
 ### Cross-Compilation
 ```bash
-# Windows amd64
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dxfchk.exe ./cmd/dxfchk/
+# Windows amd64 (primary target — Valmet VMs)
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.cliVersion=v0.6.7" -o dxfchk.exe ./cmd/dxfchk/
 
 # Linux amd64
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dxfchk ./cmd/dxfchk/
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.cliVersion=v0.6.7" -o dxfchk ./cmd/dxfchk/
 ```
 
 ### Security Rules
