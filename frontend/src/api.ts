@@ -148,6 +148,12 @@ export interface TemplateGroup {
   total_files: number;
 }
 
+export interface FolderEntry {
+  name: string;
+  path: string;
+  type: string; // "drive", "folder", "parent"
+}
+
 export interface DiffEntity {
   type: string;
   status: string;
@@ -327,4 +333,16 @@ export const api = {
   getTemplateGroupDetail: (groupName: string, output?: string) =>
     apiFetch<{ group: TemplateGroup | null }>(`/api/v1/template/group?name=${encodeURIComponent(groupName)}${output ? `&output=${encodeURIComponent(output)}` : ''}`),
 
+  // System folder browser
+  browseSystem: (path?: string) =>
+    apiFetch<{ entries: FolderEntry[]; current: string }>(`/api/v1/browse/system${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+
+  // Project zip export/import
+  zipExportUrl: (id: string) => `/api/v1/project/zip-export?id=${encodeURIComponent(id)}`,
+  zipImport: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetch('/api/v1/project/zip-import', { method: 'POST', body: formData })
+      .then(r => r.json());
+  },
 };

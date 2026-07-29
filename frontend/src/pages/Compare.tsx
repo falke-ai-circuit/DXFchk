@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import {
   FolderOpen, Play, Square, Loader2,
   Activity, FileCheck, FileDiff, FileQuestion,
-  ScanLine, GitCompareArrows, RotateCcw, Clock, Timer, Pause,
+  ScanLine, GitCompareArrows, RotateCcw, Clock, Timer, Pause, Search,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type CompareStatus } from '../api';
+import FolderBrowser from '../components/FolderBrowser';
 
 const inputStyle: React.CSSProperties = {
   background: 'var(--bg-elevated)',
@@ -50,6 +51,7 @@ export default function Compare() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
+  const [browserTarget, setBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -219,18 +221,33 @@ export default function Compare() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
             <label style={labelStyle}>Template Folder — contains original DXF templates</label>
-            <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={inputStyle} />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={{ ...inputStyle, flex: 1 }} />
+              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('template')}>
+                <Search size={14} /> Browse
+              </button>
+            </div>
           </div>
           <div>
             <label style={labelStyle}>Search Folder — contains DXF files to compare</label>
-            <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\search" style={inputStyle} />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\search" style={{ ...inputStyle, flex: 1 }} />
+              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('search')}>
+                <Search size={14} /> Browse
+              </button>
+            </div>
           </div>
           <div>
             <label style={labelStyle}>Output Folder — where results are saved</label>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
               Identical files → template folders · Different files → _mod folders · No template → 'notemplate' folder
             </div>
-            <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={inputStyle} />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={{ ...inputStyle, flex: 1 }} />
+              <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => setBrowserTarget('output')}>
+                <Search size={14} /> Browse
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -326,6 +343,20 @@ export default function Compare() {
           )}
         </div>
       </div>
+
+      {/* Folder Browser Modal */}
+      {browserTarget && (
+        <FolderBrowser
+          initialPath={browserTarget === 'template' ? templateFolder : browserTarget === 'search' ? searchFolder : outputFolder}
+          onSelect={(path) => {
+            if (browserTarget === 'template') setTemplateFolder(path);
+            else if (browserTarget === 'search') setSearchFolder(path);
+            else if (browserTarget === 'output') setOutputFolder(path);
+            setBrowserTarget(null);
+          }}
+          onClose={() => setBrowserTarget(null)}
+        />
+      )}
     </div>
   );
 }

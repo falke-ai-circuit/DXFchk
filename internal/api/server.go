@@ -112,6 +112,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/dxf/content", s.handleDXFContent)
 	s.mux.HandleFunc("POST /api/v1/template/edit-script", s.handleEditScript)
 	s.mux.HandleFunc("GET /api/v1/template/group", s.handleTemplateGroupDetail) // ?name=XXX
+	s.mux.HandleFunc("GET /api/v1/browse/system", s.handleBrowseSystem)
+	s.mux.HandleFunc("GET /api/v1/project/zip-export", s.handleProjectZipExport)
+	s.mux.HandleFunc("POST /api/v1/project/zip-import", s.handleProjectZipImport)
 }
 
 // ServeHTTP implements http.Handler

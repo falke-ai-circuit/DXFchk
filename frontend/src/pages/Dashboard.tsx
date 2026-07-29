@@ -2,10 +2,11 @@ import { useEffect, useState, useRef } from 'react';
 import {
   FolderOpen, Plus, Trash2, Folder, FileSearch, Files,
   FileCheck, FileDiff, FileQuestion, Activity, Loader2, FolderCog,
-  Download, Upload,
+  Download, Upload, Save, X, Package,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type Project } from '../api';
+import FolderBrowser from '../components/FolderBrowser';
 
 const inputStyle: React.CSSProperties = {
   background: 'var(--bg-elevated)',
@@ -39,13 +40,16 @@ export default function Dashboard() {
   } = useStore();
 
   const [showCreate, setShowCreate] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [name, setName] = useState('');
   const [templateFolder, setTemplateFolder] = useState('');
   const [searchFolder, setSearchFolder] = useState('');
   const [outputFolder, setOutputFolder] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [browserTarget, setBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
+  const fileImportRef = useRef<HTMLInputElement>(null);
+  const zipImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchHealth();
@@ -87,10 +91,10 @@ export default function Dashboard() {
     await selectProject(id);
   };
 
-  const handleExport = async (id: string, e: React.MouseEvent) => {
+  const handleExport = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      const project = await api.exportProject(id);
+    // Download project config as JSON
+    api.exportProject(id).then(project => {
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -98,7 +102,19 @@ export default function Dashboard() {
       a.download = `${id}.json`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch { /* ignore */ }
+    }).catch(() => {});
+  };
+
+  const handleZipExport = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Download full project as zip
+    const url = api.zipExportUrl(id);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${id}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -112,7 +128,58 @@ export default function Dashboard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to import project');
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (fileImportRef.current) fileImportRef.current.value = '';
+  };
+
+  const handleZipImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.zipImport(file);
+      await fetchProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import zip');
+    }
+    if (zipImportRef.current) zipImportRef.current.value = '';
+  };
+
+  const handleEditProject = (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingProject({ ...project });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingProject) return;
+    try {
+      await api.updateProject(editingProject.id, {
+        name: editingProject.name,
+        template_folder: editingProject.template_folder,
+        search_folder: editingProject.search_folder,
+        output_folder: editingProject.output_folder,
+        recursive: editingProject.recursive,
+        group_by_content: editingProject.group_by_content,
+        move_files: editingProject.move_files,
+      });
+      await fetchProjects();
+      setEditingProject(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+    }
+  };
+
+  const handleBrowserSelect = (path: string) => {
+    if (browserTarget === 'template') setTemplateFolder(path);
+    else if (browserTarget === 'search') setSearchFolder(path);
+    else if (browserTarget === 'output') setOutputFolder(path);
+    setBrowserTarget(null);
+  };
+
+  const handleEditBrowserSelect = (path: string) => {
+    if (!editingProject) return;
+    if (browserTarget === 'template') setEditingProject({ ...editingProject, template_folder: path });
+    else if (browserTarget === 'search') setEditingProject({ ...editingProject, search_folder: path });
+    else if (browserTarget === 'output') setEditingProject({ ...editingProject, output_folder: path });
+    setBrowserTarget(null);
   };
 
   const matched = compareStatus?.matched ?? results.filter(r => r.status === 'match').length;
@@ -158,7 +225,7 @@ export default function Dashboard() {
       ) : (
         <div className="card" style={{ marginBottom: '16px', textAlign: 'center', padding: '32px' }}>
           <FolderOpen size={32} color="var(--text-muted)" style={{ marginBottom: '8px' }} />
-          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>No active project. Create one below or import an existing project.</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>No active project. Create one below, import a config, or import a zip.</p>
         </div>
       )}
 
@@ -172,17 +239,19 @@ export default function Dashboard() {
       </div>
 
       {/* Projects List */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Projects</h2>
         <button className="btn btn-primary" style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12 }} onClick={() => setShowCreate(!showCreate)}>
-          <Plus size={14} />
-          New Project
+          <Plus size={14} /> New Project
         </button>
-        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => fileInputRef.current?.click()}>
-          <Upload size={14} />
-          Import
+        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => fileImportRef.current?.click()} title="Import project config JSON">
+          <Upload size={14} /> Import Config
         </button>
-        <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+        <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => zipImportRef.current?.click()} title="Import full project zip (folders + files)">
+          <Package size={14} /> Import ZIP
+        </button>
+        <input ref={fileImportRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+        <input ref={zipImportRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleZipImport} />
       </div>
 
       {/* Create Project Form */}
@@ -199,18 +268,9 @@ export default function Dashboard() {
               <label style={labelStyle}>Project Name</label>
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse Comparison" style={inputStyle} />
             </div>
-            <div>
-              <label style={labelStyle}>Template Folder (contains DXF templates)</label>
-              <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Search Folder (contains DXF files to compare)</label>
-              <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\modules" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Output Folder (optional — defaults to {searchFolder || '<search>'}/DXFchk_output)</label>
-              <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={inputStyle} />
-            </div>
+            <FolderInput label="Template Folder (contains DXF templates)" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
+            <FolderInput label="Search Folder (contains DXF files to compare)" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />
+            <FolderInput label="Output Folder (optional — defaults to {search}/DXFchk_output)" value={outputFolder} onChange={setOutputFolder} onBrowse={() => setBrowserTarget('output')} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
                 {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
@@ -253,8 +313,14 @@ export default function Dashboard() {
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 {new Date(p.last_used).toLocaleDateString()}
               </span>
-              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleExport(p.id, e)} title="Export project">
+              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleEditProject(p, e)} title="Edit project details">
+                <FolderCog size={12} />
+              </button>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleExport(p.id, e)} title="Export config JSON">
                 <Download size={12} />
+              </button>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleZipExport(p.id, e)} title="Export full project as ZIP">
+                <Package size={12} />
               </button>
               <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 11 }} onClick={(e) => handleDelete(p.id, e)}>
                 <Trash2 size={12} />
@@ -295,6 +361,80 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Folder Browser Modal */}
+      {browserTarget && (
+        <FolderBrowser
+          initialPath={browserTarget === 'template' ? templateFolder : browserTarget === 'search' ? searchFolder : outputFolder}
+          onSelect={editingProject ? handleEditBrowserSelect : handleBrowserSelect}
+          onClose={() => setBrowserTarget(null)}
+        />
+      )}
+
+      {/* Edit Project Modal */}
+      {editingProject && (
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setEditingProject(null)}
+        >
+          <div
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, width: '600px', maxHeight: '80vh', overflow: 'auto', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+              <FolderCog size={20} color="var(--accent)" />
+              <h2 style={{ fontSize: '18px', fontWeight: 700 }}>Edit Project</h2>
+              <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '4px 8px' }} onClick={() => setEditingProject(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={labelStyle}>Project Name</label>
+                <input type="text" value={editingProject.name} onChange={(e) => setEditingProject({ ...editingProject, name: e.target.value })} style={inputStyle} />
+              </div>
+              <FolderInput label="Template Folder" value={editingProject.template_folder} onChange={(v) => setEditingProject({ ...editingProject, template_folder: v })} onBrowse={() => setBrowserTarget('template')} />
+              <FolderInput label="Search Folder" value={editingProject.search_folder} onChange={(v) => setEditingProject({ ...editingProject, search_folder: v })} onBrowse={() => setBrowserTarget('search')} />
+              <FolderInput label="Output Folder" value={editingProject.output_folder} onChange={(v) => setEditingProject({ ...editingProject, output_folder: v })} onBrowse={() => setBrowserTarget('output')} />
+              <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                  <input type="checkbox" checked={editingProject.recursive} onChange={(e) => setEditingProject({ ...editingProject, recursive: e.target.checked })} />
+                  Recursive
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                  <input type="checkbox" checked={editingProject.group_by_content} onChange={(e) => setEditingProject({ ...editingProject, group_by_content: e.target.checked })} />
+                  Group by content
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 12 }}>
+                  <input type="checkbox" checked={editingProject.move_files} onChange={(e) => setEditingProject({ ...editingProject, move_files: e.target.checked })} />
+                  Move files
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                <button className="btn btn-primary" onClick={handleSaveEdit}>
+                  <Save size={14} /> Save Changes
+                </button>
+                <button className="btn btn-ghost" onClick={() => setEditingProject(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// FolderInput — text input with browse button
+function FolderInput({ label, value, onChange, onBrowse }: { label: string; value: string; onChange: (v: string) => void; onBrowse: () => void }) {
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder="C:\path\to\folder" style={{ ...inputStyle, flex: 1 }} />
+        <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={onBrowse}>
+          <FolderOpen size={14} /> Browse
+        </button>
+      </div>
     </div>
   );
 }
