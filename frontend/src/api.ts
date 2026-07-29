@@ -181,6 +181,17 @@ export interface DiffResponse {
   };
 }
 
+export interface DXFRenderResponse {
+  entities: DiffEntity[];
+  count: number;
+  bounding_box: [number, number, number, number];
+  type_counts: Record<string, number>;
+  layers: string[];
+  layer_count: number;
+  path: string;
+  name: string;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {
@@ -312,6 +323,10 @@ export const api = {
   // DXF raw content (read DXF file as text)
   getDXFContent: (filePath: string) =>
     apiFetch<{ content: string; lines: number }>(`/api/v1/dxf/content?path=${encodeURIComponent(filePath)}`),
+
+  // DXF render data (entities for visual CAD rendering)
+  getDXFRender: (filePath: string) =>
+    apiFetch<DXFRenderResponse>(`/api/v1/dxf/render?path=${encodeURIComponent(filePath)}`),
 
   // Edit DXF file (save modified content)
   saveDXFContent: (filePath: string, content: string) =>

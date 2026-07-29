@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -198,6 +199,16 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 			ix := ent.GetFloatValue(10)
 			iy := ent.GetFloatValue(20)
 			layer := ent.GetStringValue(8)
+			// Get rotation angle (code 50) and scale (codes 41/42)
+			rot := ent.GetFloatValue(50)
+			sx := ent.GetFloatValue(41)
+			sy := ent.GetFloatValue(42)
+			if sx == 0 {
+				sx = 1
+			}
+			if sy == 0 {
+				sy = 1
+			}
 			e := &DiffEntity{
 				Type:      "insert",
 				Status:    "same",
@@ -205,6 +216,84 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 				Layer:     layer,
 				Coords:    []float64{ix, iy},
 				Coords2D:  [][]float64{{ix, iy}},
+			}
+			_ = rot // rotation stored but not yet rendered
+			_ = sx
+			_ = sy
+			entities = append(entities, e)
+
+		case "TEXT", "MTEXT":
+			tx := ent.GetFloatValue(10)
+			ty := ent.GetFloatValue(20)
+			text := ent.GetStringValue(1)
+			layer := ent.GetStringValue(8)
+			height := ent.GetFloatValue(40)
+			if height == 0 {
+				height = 2.5 // default text height
+			}
+			rot := ent.GetFloatValue(50)
+			e := &DiffEntity{
+				Type:      "text",
+				Status:    "same",
+				Layer:     layer,
+				BlockName: text, // reuse BlockName for text content
+				Coords:    []float64{tx, ty},
+				Coords2D:  [][]float64{{tx, ty}, {height}, {rot}},
+			}
+			entities = append(entities, e)
+
+		case "CIRCLE":
+			cx := ent.GetFloatValue(10)
+			cy := ent.GetFloatValue(20)
+			radius := ent.GetFloatValue(40)
+			layer := ent.GetStringValue(8)
+			e := &DiffEntity{
+				Type:   "circle",
+				Status: "same",
+				Layer:  layer,
+				Coords: []float64{cx, cy, radius},
+				Coords2D: [][]float64{{cx, cy}, {radius}},
+			}
+			entities = append(entities, e)
+
+		case "ARC":
+			cx := ent.GetFloatValue(10)
+			cy := ent.GetFloatValue(20)
+			radius := ent.GetFloatValue(40)
+			startAng := ent.GetFloatValue(50) * math.Pi / 180
+			endAng := ent.GetFloatValue(51) * math.Pi / 180
+			layer := ent.GetStringValue(8)
+			// Generate arc points
+			segments := 32
+			var coords []float64
+			var coords2D [][]float64
+			for i := 0; i <= segments; i++ {
+				t := float64(i) / float64(segments)
+				ang := startAng + t*(endAng-startAng)
+				x := cx + radius*math.Cos(ang)
+				y := cy + radius*math.Sin(ang)
+				coords = append(coords, x, y)
+				coords2D = append(coords2D, []float64{x, y})
+			}
+			e := &DiffEntity{
+				Type:     "arc",
+				Status:   "same",
+				Layer:    layer,
+				Coords:   coords,
+				Coords2D: coords2D,
+			}
+			entities = append(entities, e)
+
+		case "POINT":
+			px := ent.GetFloatValue(10)
+			py := ent.GetFloatValue(20)
+			layer := ent.GetStringValue(8)
+			e := &DiffEntity{
+				Type:     "point",
+				Status:   "same",
+				Layer:    layer,
+				Coords:   []float64{px, py},
+				Coords2D: [][]float64{{px, py}},
 			}
 			entities = append(entities, e)
 		}

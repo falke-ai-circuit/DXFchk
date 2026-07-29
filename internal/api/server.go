@@ -109,6 +109,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/template/groups", s.handleTemplateGroups)
 	s.mux.HandleFunc("GET /api/v1/log", s.handleLogContent)
 	s.mux.HandleFunc("GET /api/v1/dxf/content", s.handleDXFContent)
+	s.mux.HandleFunc("GET /api/v1/dxf/render", s.handleDXFRender)
 	s.mux.HandleFunc("POST /api/v1/dxf/content", s.handleDXFContent)
 	s.mux.HandleFunc("POST /api/v1/template/edit-script", s.handleEditScript)
 	s.mux.HandleFunc("GET /api/v1/template/group", s.handleTemplateGroupDetail) // ?name=XXX

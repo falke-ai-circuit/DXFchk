@@ -9,6 +9,67 @@ import (
 	"strings"
 )
 
+// handleDXFRender returns all entities from a single DXF file for visual rendering
+func (s *Server) handleDXFRender(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		ErrorResponse(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	if !strings.HasSuffix(strings.ToLower(path), ".dxf") {
+		ErrorResponse(w, http.StatusBadRequest, "only .dxf files are allowed")
+		return
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusNotFound, "file not found")
+		return
+	}
+
+	entities, err := extractEntities(path)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "failed to parse DXF: "+err.Error())
+		return
+	}
+
+	bbox := computeBoundingBox(entities)
+
+	// Count entity types
+	typeCounts := make(map[string]int)
+	for _, e := range entities {
+		typeCounts[e.Type]++
+	}
+
+	// Collect layers
+	layerSet := make(map[string]bool)
+	for _, e := range entities {
+		if e.Layer != "" {
+			layerSet[e.Layer] = true
+		}
+	}
+	layers := make([]string, 0, len(layerSet))
+	for l := range layerSet {
+		layers = append(layers, l)
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"entities":      entities,
+		"count":         len(entities),
+		"bounding_box":  bbox,
+		"type_counts":   typeCounts,
+		"layers":        layers,
+		"layer_count":   len(layers),
+		"path":          path,
+		"name":          filepath.Base(path),
+	})
+}
+
 // handleLogContent returns the content of a .log file
 func (s *Server) handleLogContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
