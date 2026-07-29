@@ -22,6 +22,8 @@ type TemplateMapResult struct {
 // CompareRequest is the body for POST /api/v1/compare
 type CompareRequest struct {
 	SearchFolder   string `json:"search_folder"`
+	TemplateFolder string `json:"template_folder"`
+	OutputFolder   string `json:"output_folder"`
 	Recursive      bool   `json:"recursive"`
 	MoveFiles      bool   `json:"move_files"`
 	GroupByContent bool   `json:"group_by_content"`
@@ -144,11 +146,30 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outputFolder := s.settings.OutputFolder
+	outputFolder := req.OutputFolder
+	if outputFolder == "" {
+		outputFolder = s.settings.OutputFolder
+	}
 	if outputFolder == "" {
 		outputFolder = filepath.Join(searchFolder, "DXFchk_output")
 	}
 	os.MkdirAll(outputFolder, 0755)
+
+	// If template_folder provided in request, update settings and re-scan
+	if req.TemplateFolder != "" {
+		s.settings.TemplateFolder = req.TemplateFolder
+		s.settings.SearchFolder = searchFolder
+		s.settings.OutputFolder = outputFolder
+		// Re-scan templates from the provided folder
+		templateMap := compare.BuildTemplateMap(req.TemplateFolder, req.Recursive, nil)
+		s.compareState.TemplateMap = templateMap
+	}
+
+	// Set running state BEFORE starting goroutine to avoid race condition
+	s.compareState.Running = true
+	s.compareState.ProcessedFiles = 0
+	s.compareState.TotalFiles = 0
+	s.compareState.LogMessages = []string{}
 
 	// Create stop channel
 	s.stopChan = make(chan struct{}, 1)

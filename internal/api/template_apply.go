@@ -139,34 +139,33 @@ func (s *Server) handleTemplateGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildTemplateGroups scans the output folder and groups files by template
+// Supports nested _modN structure: Output/BI001/BI001_mod1/
 func buildTemplateGroups(outputFolder string) []TemplateGroup {
-	entries, err := os.ReadDir(outputFolder)
-	if err != nil {
-		return nil
-	}
-
 	// Map: templateName -> TemplateGroup
 	groupMap := make(map[string]*TemplateGroup)
 
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "notemplate" {
-			continue
+	// Walk the output folder recursively
+	filepath.Walk(outputFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() || path == outputFolder {
+			return nil
 		}
 
-		name := entry.Name()
-		folderPath := filepath.Join(outputFolder, name)
+		name := info.Name()
+		if name == "notemplate" {
+			return nil
+		}
 
-		// Check if it's a mod folder (ends with _modN)
+		// Check if it's a mod folder (contains _mod)
 		if strings.Contains(name, "_mod") {
 			// Extract base template name
 			parts := strings.Split(name, "_mod")
 			if len(parts) < 2 {
-				continue
+				return nil
 			}
 			baseName := parts[0]
 
 			// Count DXF files in this mod folder
-			subEntries, _ := os.ReadDir(folderPath)
+			subEntries, _ := os.ReadDir(path)
 			var files []string
 			for _, se := range subEntries {
 				if !se.IsDir() && strings.HasSuffix(strings.ToLower(se.Name()), ".dxf") {
@@ -182,14 +181,14 @@ func buildTemplateGroups(outputFolder string) []TemplateGroup {
 			}
 			groupMap[baseName].ModFolders = append(groupMap[baseName].ModFolders, ModGroup{
 				FolderName: name,
-				FolderPath: folderPath,
+				FolderPath: path,
 				FileCount:  len(files),
 				Files:      files,
 			})
 			groupMap[baseName].TotalFiles += len(files)
 		} else {
 			// This is a template folder (matched files)
-			subEntries, _ := os.ReadDir(folderPath)
+			subEntries, _ := os.ReadDir(path)
 			count := 0
 			for _, se := range subEntries {
 				if !se.IsDir() && strings.HasSuffix(strings.ToLower(se.Name()), ".dxf") {
@@ -205,10 +204,10 @@ func buildTemplateGroups(outputFolder string) []TemplateGroup {
 			}
 			groupMap[name].MatchedCount = count
 			groupMap[name].TotalFiles += count
-			// Try to find template file path from project settings
-			groupMap[name].TemplatePath = filepath.Join(folderPath, name+".dxf") // approximate
+			groupMap[name].TemplatePath = filepath.Join(path, name+".dxf")
 		}
-	}
+		return nil
+	})
 
 	// Convert to sorted slice
 	groups := make([]TemplateGroup, 0, len(groupMap))

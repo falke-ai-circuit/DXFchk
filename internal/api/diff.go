@@ -18,7 +18,7 @@ type DiffEntity struct {
 	Status     string     `json:"status"`     // "added", "removed", "modified", "same"
 	Coords     []float64  `json:"coords"`     // flattened coordinates [x1,y1,x2,y2,...]
 	Coords2D   [][]float64 `json:"coords_2d"`  // [[x,y], [x,y], ...]
-	BlockName  string     `json:"block_name"` // for INSERT entities
+	BlockName  string     `json:"block_name"` // for INSERT entities: block name; for TEXT: the text content
 	Layer      string     `json:"layer"`
 	Color      int        `json:"color"`      // ACI color index (0=ByBlock, 256=ByLayer)
 	Rotation    float64   `json:"rotation"`   // rotation angle in degrees
@@ -33,6 +33,20 @@ type DiffEntity struct {
 	BlockEntities []*DiffEntity `json:"block_entities,omitempty"` // entities from block definition
 	BlockBaseX    float64       `json:"block_base_x,omitempty"`
 	BlockBaseY    float64       `json:"block_base_y,omitempty"`
+	// ATTRIB data for INSERT entities (block attributes — terminal names, values, formulas)
+	Attribs []DiffAttrib `json:"attribs,omitempty"`
+}
+
+// DiffAttrib represents a block attribute (ATTRIB entity inside an INSERT)
+type DiffAttrib struct {
+	Tag    string  `json:"tag"`     // ATTRIB tag (code 2) — e.g. "INPUT_PULSE", "OPERATOR"
+	Text   string  `json:"text"`    // ATTRIB text value (code 1) — e.g. "602.5000.0006"
+	X      float64 `json:"x"`        // ATTRIB insertion point X (code 10)
+	Y      float64 `json:"y"`        // ATTRIB insertion point Y (code 20)
+	Height float64 `json:"height"`   // text height (code 40)
+	Rotation float64 `json:"rotation"` // rotation angle in degrees (code 50)
+	HAlign int     `json:"h_align"`  // horizontal alignment (code 72)
+	VAlign int     `json:"v_align"`  // vertical alignment (code 73)
 }
 
 // DiffResponse is the comparison result between template and module DXF
@@ -249,6 +263,37 @@ func extractFromDrawing(drawing *dxf.Drawing) []*DiffEntity {
 				ScaleX:    sx,
 				ScaleY:    sy,
 			}
+			// Extract ATTRIB entities (block attributes — terminal names, values, formulas)
+			for _, att := range ent.Attribs {
+				attTag := att.GetStringValue(2)
+				attText := stripMTextFormatting(att.GetStringValue(1))
+				if attText == "" {
+					continue
+				}
+				ax := att.GetFloatValue(10)
+				ay := att.GetFloatValue(20)
+				ah := att.GetFloatValue(40)
+				if ah == 0 {
+					ah = 2.5
+				}
+				ar := att.GetFloatValue(50) * 180 / math.Pi
+				ahAlign := att.GetIntValue(72)
+				avAlign := att.GetIntValue(73)
+				// Use alignment point if present
+				if ahAlign != 0 || avAlign != 0 {
+					ax2 := att.GetFloatValue(11)
+					ay2 := att.GetFloatValue(21)
+					if ax2 != 0 || ay2 != 0 {
+						ax = ax2
+						ay = ay2
+					}
+				}
+				e.Attribs = append(e.Attribs, DiffAttrib{
+					Tag: attTag, Text: attText,
+					X: ax, Y: ay, Height: ah, Rotation: ar,
+					HAlign: ahAlign, VAlign: avAlign,
+				})
+			}
 			// Resolve block entities from BLOCKS section
 			if block, ok := drawing.Blocks[strings.ToUpper(blockName)]; ok {
 				e.BlockBaseX = block.BaseX
@@ -261,7 +306,7 @@ func extractFromDrawing(drawing *dxf.Drawing) []*DiffEntity {
 		case "TEXT", "MTEXT":
 			tx := ent.GetFloatValue(10)
 			ty := ent.GetFloatValue(20)
-			text := ent.GetStringValue(1)
+			text := stripMTextFormatting(ent.GetStringValue(1))
 			height := ent.GetFloatValue(40)
 			if height == 0 {
 				height = 2.5
@@ -276,6 +321,15 @@ func extractFromDrawing(drawing *dxf.Drawing) []*DiffEntity {
 				if ax != 0 || ay != 0 {
 					tx = ax
 					ty = ay
+				}
+			}
+			// For MTEXT, also check code 11/21/31 for insertion point
+			if typ == "MTEXT" {
+				ix := ent.GetFloatValue(10)
+				iy := ent.GetFloatValue(20)
+				if ix != 0 || iy != 0 {
+					tx = ix
+					ty = iy
 				}
 			}
 			e := &DiffEntity{
@@ -420,7 +474,7 @@ func extractFromEntities(ents []dxf.Entity, drawing *dxf.Drawing) []*DiffEntity 
 		case "TEXT", "MTEXT":
 			tx := ent.GetFloatValue(10)
 			ty := ent.GetFloatValue(20)
-			text := ent.GetStringValue(1)
+			text := stripMTextFormatting(ent.GetStringValue(1))
 			height := ent.GetFloatValue(40)
 			if height == 0 {
 				height = 2.5
@@ -434,6 +488,15 @@ func extractFromEntities(ents []dxf.Entity, drawing *dxf.Drawing) []*DiffEntity 
 				if ax != 0 || ay != 0 {
 					tx = ax
 					ty = ay
+				}
+			}
+			// For MTEXT, also check code 11/21/31 for insertion point
+			if typ == "MTEXT" {
+				ix := ent.GetFloatValue(10)
+				iy := ent.GetFloatValue(20)
+				if ix != 0 || iy != 0 {
+					tx = ix
+					ty = iy
 				}
 			}
 			result = append(result, &DiffEntity{
@@ -486,6 +549,165 @@ func hasCode(pairs []dxf.CodePair, code int) bool {
 func parseFloatStr(s string) float64 {
 	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	return v
+}
+
+// stripMTextFormatting removes MTEXT formatting codes from text strings
+// MTEXT can contain formatting codes like \P (paragraph), \S (stacking),
+// \f (font), \C (color), \H (height), \W (width), \Q (obliquing),
+// \T (tracking), \A (alignment), {\...} groups, etc.
+func stripMTextFormatting(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// Remove common MTEXT control sequences
+	// \P - paragraph break → space
+	s = strings.ReplaceAll(s, "\\P", " ")
+	// \~ - non-breaking space → space
+	s = strings.ReplaceAll(s, "\\~", " ")
+	// \\ - escaped backslash → backslash
+	s = strings.ReplaceAll(s, "\\\\", "\\")
+	// Remove {\fArial|b0|i0|c0|p34; ...} style formatting groups
+	// Simple approach: remove \f...; sequences
+	for {
+		idx := strings.Index(s, "\\f")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \C+number; (color)
+	for {
+		idx := strings.Index(s, "\\C")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \H+number; (height) and \H+numberx; (relative height)
+	for {
+		idx := strings.Index(s, "\\H")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \W+number; (width)
+	for {
+		idx := strings.Index(s, "\\W")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \Q+number; (obliquing)
+	for {
+		idx := strings.Index(s, "\\Q")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \T+number; (tracking)
+	for {
+		idx := strings.Index(s, "\\T")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \A+number; (alignment)
+	for {
+		idx := strings.Index(s, "\\A")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		s = s[:idx] + s[idx+end+1:]
+	}
+	// Remove \S...; (stacking/fractions) — keep content before /
+	for {
+		idx := strings.Index(s, "\\S")
+		if idx < 0 {
+			break
+		}
+		end := strings.Index(s[idx:], ";")
+		if end < 0 {
+			break
+		}
+		// Keep content but remove the stacking syntax
+		content := s[idx+2 : idx+end]
+		content = strings.ReplaceAll(content, "/", " ")
+		content = strings.ReplaceAll(content, "#", " ")
+		s = s[:idx] + content + s[idx+end+1:]
+	}
+	// Remove brace groups { ... } but keep content
+	for {
+		idx := strings.Index(s, "{")
+		if idx < 0 {
+			break
+		}
+		// Find matching closing brace
+		depth := 1
+		j := idx + 1
+		for j < len(s) && depth > 0 {
+			if s[j] == '{' {
+				depth++
+			} else if s[j] == '}' {
+				depth--
+			}
+			if depth > 0 {
+				j++
+			}
+		}
+		if depth > 0 {
+			break
+		}
+		inner := s[idx+1 : j]
+		// Check if inner starts with a backslash formatting code
+		if len(inner) > 0 && inner[0] == '\\' {
+			// Find content after the formatting code (after first ;)
+			semiIdx := strings.Index(inner, ";")
+			if semiIdx >= 0 {
+				inner = inner[semiIdx+1:]
+			} else {
+				inner = ""
+			}
+		}
+		s = s[:idx] + inner + s[j+1:]
+	}
+	// Collapse multiple spaces
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return strings.TrimSpace(s)
 }
 
 // computeEntityDiff finds added, removed, and modified entities

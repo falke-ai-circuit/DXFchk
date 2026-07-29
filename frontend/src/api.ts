@@ -154,6 +154,17 @@ export interface FolderEntry {
   type: string; // "drive", "folder", "parent"
 }
 
+export interface DiffAttrib {
+  tag: string;
+  text: string;
+  x: number;
+  y: number;
+  height: number;
+  rotation: number;
+  h_align: number;
+  v_align: number;
+}
+
 export interface DiffEntity {
   type: string;
   status: string;
@@ -173,6 +184,7 @@ export interface DiffEntity {
   block_entities?: DiffEntity[];
   block_base_x?: number;
   block_base_y?: number;
+  attribs?: DiffAttrib[];
 }
 
 export interface DiffResponse {

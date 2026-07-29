@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup } from '../api';
+import DXFViewer from '../components/DXFViewer';
 
 export default function Browse() {
   const { activeProject } = useStore();
@@ -355,7 +356,7 @@ export default function Browse() {
               </div>
             )}
 
-            {/* DXF Canvas View */}
+            {/* DXF Viewer with diff highlighting */}
             {!logContent && (
               <div style={{ flex: 1, overflow: 'auto', display: 'flex', backgroundColor: 'var(--bg-primary)' }}>
                 {diffLoading ? (
@@ -369,14 +370,27 @@ export default function Browse() {
                       <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
                         {compareMode === 'mod' ? 'Fixed Template' : 'Template'}
                       </div>
-                      <DXFCanvas entities={diff.template_entities} added={[]} removed={diff.removed} bbox={diff.bounding_box} />
+                      <DXFViewer
+                        entities={diff.template_entities}
+                        boundingBox={diff.bounding_box}
+                        showInfoPanel={false}
+                      />
                     </div>
-                    {/* Module View */}
+                    {/* Module View with diff highlighting */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                       <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
                         Module (differences highlighted)
+                        {diff.summary.added_count > 0 && <span style={{ color: 'var(--error)', marginLeft: '8px' }}>+{diff.summary.added_count} added</span>}
+                        {diff.summary.removed_count > 0 && <span style={{ color: 'var(--warning)', marginLeft: '8px' }}>-{diff.summary.removed_count} removed</span>}
                       </div>
-                      <DXFCanvas entities={diff.module_entities} added={diff.added} removed={[]} bbox={diff.bounding_box} highlightDiffs={true} />
+                      <DXFViewer
+                        entities={diff.module_entities}
+                        boundingBox={diff.bounding_box}
+                        highlightAdded={true}
+                        addedSet={new Set(diff.added.map(e => entityKey(e)))}
+                        removedSet={new Set(diff.removed.map(e => entityKey(e)))}
+                        showInfoPanel={false}
+                      />
                     </div>
                   </div>
                 ) : templatePath === null && selectedFile?.toLowerCase().endsWith('.dxf') ? (
@@ -496,136 +510,7 @@ function TreeView({ node, level, selectedFile, onFileClick }: {
   );
 }
 
-// DXFCanvas renders DXF entities on an SVG canvas with diff highlighting
-function DXFCanvas({ entities, added, removed, bbox, highlightDiffs }: {
-  entities: DiffEntity[];
-  added: DiffEntity[];
-  removed: DiffEntity[];
-  bbox: [number, number, number, number];
-  highlightDiffs?: boolean;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 600, h: 400 });
-
-  useEffect(() => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      setSize({ w: rect.width, h: rect.height });
-    }
-  }, []);
-
-  const [minX, minY, maxX, maxY] = bbox;
-  const bw = maxX - minX || 100;
-  const bh = maxY - minY || 100;
-
-  const padding = 40;
-  const scale = Math.min((size.w - padding * 2) / bw, (size.h - padding * 2) / bh);
-  const offsetX = (size.w - bw * scale) / 2 - minX * scale;
-  const offsetY = (size.h - bh * scale) / 2 + maxY * scale;
-
-  const tx = (x: number) => x * scale + offsetX;
-  const ty = (y: number) => -y * scale + offsetY;
-
-  const addedSet = new Set(added.map(e => entityKey(e)));
-
-  return (
-    <div ref={containerRef} style={{ flex: 1, overflow: 'hidden', position: 'relative', backgroundColor: 'var(--bg-primary)' }}>
-      <svg width={size.w} height={size.h} style={{ display: 'block' }}>
-        <defs>
-          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="var(--border)" strokeWidth="0.5" />
-          </pattern>
-        </defs>
-        <rect width={size.w} height={size.h} fill="url(#grid)" opacity="0.3" />
-
-        {entities.map((e, i) => {
-          const isAdded = highlightDiffs && addedSet.has(entityKey(e));
-          const stroke = isAdded ? 'var(--error)' : 'var(--accent)';
-          const strokeWidth = isAdded ? 2 : 1;
-          const opacity = isAdded ? 1 : 0.6;
-
-          switch (e.type) {
-            case 'line':
-              if (e.coords.length >= 4) {
-                return (
-                  <g key={i}>
-                    <line x1={tx(e.coords[0])} y1={ty(e.coords[1])} x2={tx(e.coords[2])} y2={ty(e.coords[3])}
-                      stroke={stroke} strokeWidth={strokeWidth} opacity={opacity} />
-                    {isAdded && <DiffCircle cx={tx((e.coords[0] + e.coords[2]) / 2)} cy={ty((e.coords[1] + e.coords[3]) / 2)} />}
-                  </g>
-                );
-              }
-              return null;
-            case 'lwpolyline':
-            case 'polyline':
-              if (e.coords_2d.length >= 2) {
-                const points = e.coords_2d.map(p => `${tx(p[0])},${ty(p[1])}`).join(' ');
-                return (
-                  <g key={i}>
-                    <polyline points={points} fill="none" stroke={stroke} strokeWidth={strokeWidth} opacity={opacity} />
-                    {isAdded && <DiffCircle cx={tx(e.coords_2d[0][0])} cy={ty(e.coords_2d[0][1])} />}
-                  </g>
-                );
-              }
-              return null;
-            case 'insert':
-              if (e.coords.length >= 2) {
-                return (
-                  <g key={i}>
-                    <rect x={tx(e.coords[0]) - 4} y={ty(e.coords[1]) - 4} width="8" height="8"
-                      fill="none" stroke={stroke} strokeWidth={strokeWidth} opacity={opacity} />
-                    {isAdded && <DiffCircle cx={tx(e.coords[0])} cy={ty(e.coords[1])} />}
-                  </g>
-                );
-              }
-              return null;
-            default:
-              return null;
-          }
-        })}
-
-        {removed.map((e, i) => {
-          const stroke = 'var(--warning)';
-          switch (e.type) {
-            case 'line':
-              if (e.coords.length >= 4) {
-                return <line key={`r${i}`} x1={tx(e.coords[0])} y1={ty(e.coords[1])} x2={tx(e.coords[2])} y2={ty(e.coords[3])}
-                  stroke={stroke} strokeWidth={2} strokeDasharray="4,2" opacity={0.5} />;
-              }
-              return null;
-            case 'lwpolyline':
-            case 'polyline':
-              if (e.coords_2d.length >= 2) {
-                const points = e.coords_2d.map(p => `${tx(p[0])},${ty(p[1])}`).join(' ');
-                return <polyline key={`r${i}`} points={points} fill="none" stroke={stroke} strokeWidth={2} strokeDasharray="4,2" opacity={0.5} />;
-              }
-              return null;
-            case 'insert':
-              if (e.coords.length >= 2) {
-                return <rect key={`r${i}`} x={tx(e.coords[0]) - 4} y={ty(e.coords[1]) - 4} width="8" height="8"
-                  fill="none" stroke={stroke} strokeWidth={2} strokeDasharray="2,2" opacity={0.5} />;
-              }
-              return null;
-            default:
-              return null;
-          }
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function DiffCircle({ cx, cy }: { cx: number; cy: number }) {
-  return (
-    <g>
-      <circle cx={cx} cy={cy} r="12" fill="none" stroke="var(--error)" strokeWidth="2" opacity="0.8">
-        <animate attributeName="r" values="8;16;8" dur="2s" repeatCount="indefinite" />
-        <animate attributeName="opacity" values="0.8;0.3;0.8" dur="2s" repeatCount="indefinite" />
-      </circle>
-    </g>
-  );
-}
-
+// entityKey generates a unique key for an entity (used for diff set lookup)
 function entityKey(e: DiffEntity): string {
   const coords = e.coords.map(c => c.toFixed(2)).join(',');
   return `${e.type}:${e.block_name}:${coords}`;

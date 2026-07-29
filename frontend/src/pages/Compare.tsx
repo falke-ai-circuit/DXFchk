@@ -122,7 +122,9 @@ export default function Compare() {
         recursive,
         move_files: moveFiles,
         group_by_content: groupByContent,
-      });
+        template_folder: templateFolder,
+        output_folder: outputFolder,
+      } as any);
       setSuccessMsg(result.message || 'Comparison started');
       setHasSession(true);
       if (intervalRef.current) clearInterval(intervalRef.current);

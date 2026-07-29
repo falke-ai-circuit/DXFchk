@@ -482,7 +482,8 @@ func (c *ComparisonProcessor) Finalize() {
 			files := hashFiles[hash]
 			// Python: mod_folder_name = f"{sanitized_template_name}_mod{mod_idx}"
 			modFolderName := fmt.Sprintf("%s_mod%d", safeName, i+1)
-			modDir := filepath.Join(c.OutputFolder, modFolderName)
+			// Nest _modN under the template name folder: Output/BI001/BI001_mod1/
+			modDir := filepath.Join(c.OutputFolder, safeName, modFolderName)
 			os.MkdirAll(modDir, 0755)
 
 			c.log(fmt.Sprintf("  -> Using mod folder: %s with %d files", modFolderName, len(files)))
@@ -817,8 +818,9 @@ func (c *ComparisonProcessor) saveDetailedLogs() {
 				continue
 			}
 			modFolderName := fmt.Sprintf("%s_mod%d", safeName, modIdx+1)
+			nestedPath := filepath.Join(safeName, modFolderName)
 			for _, fi := range files {
-				fileDestinations[fi.FileName] = modFolderName
+				fileDestinations[fi.FileName] = nestedPath
 			}
 		}
 	}

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { ZoomIn, ZoomOut, Maximize, Grid } from 'lucide-react';
-import type { DiffEntity } from '../api';
+import type { DiffEntity, DiffAttrib } from '../api';
 
 // AutoCAD ACI Color Index (0-255)
 // 0=ByBlock, 256=ByLayer (handled separately), 7=white/black depending on bg
@@ -21,7 +21,6 @@ const ACI_COLORS: Record<number, string> = {
 function aciToColor(aci: number): string {
   if (ACI_COLORS[aci]) return ACI_COLORS[aci];
   if (aci >= 10 && aci <= 249) {
-    // Interpolate hue
     const hue = ((aci - 10) / 240) * 360;
     return `hsl(${hue}, 100%, 50%)`;
   }
@@ -29,22 +28,19 @@ function aciToColor(aci: number): string {
 }
 
 function resolveEntityColor(entity: DiffEntity, layerColors: Record<string, number>): string {
-  // Entity color (code 62): 0=ByBlock, 256=ByLayer, 1-255=explicit
   if (entity.color > 0 && entity.color < 256) {
     return aciToColor(entity.color);
   }
-  // ByLayer: look up layer color
   if (entity.color === 256 || entity.color === 0) {
     const layerAci = layerColors[entity.layer?.toUpperCase()] ?? layerColors[entity.layer];
     if (layerAci && layerAci > 0 && layerAci < 256) {
       return aciToColor(layerAci);
     }
   }
-  return '#00ff41'; // default matrix green
+  return '#00ff41';
 }
 
 // Convert bulge to SVG arc parameters
-// bulge = tan(theta/4), positive = CCW (in DXF Y-up), negative = CW
 function bulgeToArc(x1: number, y1: number, x2: number, y2: number, bulge: number) {
   if (bulge === 0) return null;
   const dx = x2 - x1;
@@ -54,7 +50,6 @@ function bulgeToArc(x1: number, y1: number, x2: number, y2: number, bulge: numbe
   const theta = 4 * Math.atan(Math.abs(bulge));
   const radius = chord / (2 * Math.sin(theta / 2));
   const largeArc = Math.abs(bulge) > 1 ? 1 : 0;
-  // In SVG with Y-flipped (via scale(1,-1)), positive bulge (CCW in DXF) = sweep 0
   const sweep = bulge > 0 ? 0 : 1;
   return { rx: radius, ry: radius, largeArc, sweep, x: x2, y: y2 };
 }
@@ -80,7 +75,6 @@ function polylineToPath(entity: DiffEntity): string {
     }
   }
 
-  // Closing segment
   if (entity.closed && pts.length > 2) {
     const lastIdx = pts.length - 1;
     const lastBulge = bulges[lastIdx] || 0;
@@ -111,6 +105,7 @@ interface DXFViewerProps {
   layerColors?: Record<string, number>;
   highlightAdded?: boolean;
   addedSet?: Set<string>;
+  removedSet?: Set<string>;
   showInfoPanel?: boolean;
 }
 
@@ -121,6 +116,7 @@ export default function DXFViewer({
   layerColors = {},
   highlightAdded = false,
   addedSet,
+  removedSet,
   showInfoPanel = true,
 }: DXFViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -133,12 +129,10 @@ export default function DXFViewer({
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
   const [hoveredEntity, setHoveredEntity] = useState<number | null>(null);
 
-  // Initialize visible layers
   useEffect(() => {
     setVisibleLayers(new Set(layers));
   }, [layers.join(',')]);
 
-  // Resize observer
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver(entries => {
@@ -152,6 +146,7 @@ export default function DXFViewer({
   }, []);
 
   // Compute initial zoom-to-fit
+  // With per-entity Y negation (no group Y-flip), screen = world * zoom + pan
   const fitToView = useCallback(() => {
     const [minX, minY, maxX, maxY] = boundingBox;
     const bw = maxX - minX || 100;
@@ -161,23 +156,20 @@ export default function DXFViewer({
     const scaleY = (size.h - padding * 2) / bh;
     const fitZoom = Math.min(scaleX, scaleY);
     setZoom(fitZoom);
-    // Center the drawing: world center → screen center
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
+    // screen = world * zoom + pan → pan = screenCenter - worldCenter * zoom
     setPan({
       x: size.w / 2 - cx * fitZoom,
-      y: size.h / 2 + cy * fitZoom, // Y is flipped: +cy because screen Y is down
+      y: size.h / 2 - (-cy) * fitZoom, // entities negate Y, so world center is -cy in screen
     });
   }, [boundingBox, size]);
 
-  // Fit on mount and when entities change
   useEffect(() => {
     if (entities.length > 0 && size.w > 0) {
       fitToView();
     }
   }, [entities.length, size.w, size.h]);
-
-  // World→screen transform done via SVG group transform (Y-flip at group level)
 
   // Mouse handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -202,8 +194,8 @@ export default function DXFViewer({
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
       const wx = (mx - pan.x) / zoom;
-      const wy = -(my - pan.y) / zoom;
-      setPan({ x: mx - wx * newZoom, y: my + wy * newZoom });
+      const wy = (my - pan.y) / zoom;
+      setPan({ x: mx - wx * newZoom, y: my - wy * newZoom });
     }
     setZoom(newZoom);
   };
@@ -224,6 +216,7 @@ export default function DXFViewer({
 
   const entityColor = (e: DiffEntity) => {
     if (highlightAdded && addedSet && addedSet.has(entityKey(e))) return '#ff0000';
+    if (highlightAdded && removedSet && removedSet.has(entityKey(e))) return '#ffaa00';
     return resolveEntityColor(e, layerColors);
   };
 
@@ -240,6 +233,23 @@ export default function DXFViewer({
       gridLines.push(<line key={`gy${y}`} x1={0} y1={y} x2={size.w} y2={y} stroke="var(--border)" strokeWidth="0.5" opacity="0.2" />);
     }
   }
+
+  // Render an ATTRIB text label inside an INSERT block
+  const renderAttrib = (att: DiffAttrib, idx: number): React.ReactNode => {
+    const anchor = HALIGN_MAP[att.h_align] || 'start';
+    const baseline = VALIGN_MAP[att.v_align] || 'alphabetic';
+    const rot = att.rotation || 0;
+    return (
+      <text key={`att${idx}`} x={att.x} y={-att.y} fill="#ffffff" fontSize={att.height}
+        fontFamily="sans-serif" textAnchor={anchor as any}
+        dominantBaseline={baseline as any}
+        transform={rot ? `rotate(${-rot} ${att.x} ${-att.y})` : undefined}
+        opacity={0.9}
+      >
+        {att.text || att.tag}
+      </text>
+    );
+  };
 
   // Render a single entity (used both for top-level and block entities)
   const renderEntity = (e: DiffEntity, i: number): React.ReactNode => {
@@ -263,7 +273,8 @@ export default function DXFViewer({
 
       case 'lwpolyline':
       case 'polyline': {
-        const path = polylineToPath({ ...e, coords_2d: e.coords_2d.map(p => [p[0], -p[1]]) });
+        const pts = e.coords_2d.map(p => [p[0], -p[1]]);
+        const path = polylineToPath({ ...e, coords_2d: pts });
         return path ? (
           <path key={i} d={path} fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
             vectorEffect="non-scaling-stroke"
@@ -273,7 +284,6 @@ export default function DXFViewer({
       }
 
       case 'arc': {
-        // Arc coords are already points; flip Y
         if (e.coords.length >= 4) {
           let pathD = `M ${e.coords[0]} ${-e.coords[1]}`;
           for (let j = 2; j < e.coords.length; j += 2) {
@@ -299,7 +309,6 @@ export default function DXFViewer({
         const bx = e.block_base_x || 0;
         const by = e.block_base_y || 0;
 
-        // Transform: translate to insertion point, rotate, scale, offset by block base point
         const transform = `translate(${ix} ${iy}) rotate(${-rot}) scale(${sx} ${sy}) translate(${-bx} ${by})`;
 
         return (
@@ -315,10 +324,13 @@ export default function DXFViewer({
                 vectorEffect="non-scaling-stroke"
               />
             )}
-            {/* Block name at high zoom */}
-            {zoom > 3 && e.block_name && (
-              <text x={4} y={0} fill={color} fontSize={2.5} fontFamily="monospace"
-                transform={`scale(${1 / sx} ${1 / sy})`} opacity={0.7}>
+            {/* Render ATTRIB text labels (terminal names, values, formulas) */}
+            {e.attribs?.map((att, ai) => renderAttrib(att, i * 10000 + ai))}
+            {/* Block name label — always visible at zoom > 0.5 */}
+            {zoom > 0.5 && e.block_name && (
+              <text x={2 / sx} y={-2 / sy} fill={color} fontSize={2.5}
+                fontFamily="monospace" opacity={0.7}
+                transform={`scale(${1 / sx} ${1 / sy})`}>
                 {e.block_name}
               </text>
             )}
@@ -336,7 +348,6 @@ export default function DXFViewer({
         const vAlign = e.v_align || 0;
         const anchor = HALIGN_MAP[hAlign] || 'start';
         const baseline = VALIGN_MAP[vAlign] || 'alphabetic';
-        // Font size in world units — the SVG group transform handles scaling
         return (
           <text key={i} x={tx_} y={ty_} fill={color} fontSize={height}
             fontFamily="sans-serif" textAnchor={anchor as any}
@@ -376,9 +387,8 @@ export default function DXFViewer({
     }
   };
 
-  // SVG group transform: world → screen
-  // translate(pan) scale(zoom, -zoom) — Y flip at group level
-  const groupTransform = `translate(${pan.x} ${pan.y}) scale(${zoom} ${-zoom})`;
+  // SVG group transform: world → screen (no Y-flip; entities negate Y individually)
+  const groupTransform = `translate(${pan.x} ${pan.y}) scale(${zoom})`;
 
   return (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', backgroundColor: 'var(--bg-primary)' }} ref={containerRef}>
@@ -392,10 +402,8 @@ export default function DXFViewer({
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
       >
-        {/* Grid (screen-space) */}
         {gridLines}
 
-        {/* World-space content (Y-flipped via group transform) */}
         <g transform={groupTransform}>
           {/* Origin axes */}
           <line x1={-10000} y1={0} x2={10000} y2={0} stroke="#444" strokeWidth={1 / zoom} opacity={0.15} />
@@ -470,6 +478,9 @@ export default function DXFViewer({
           )}
           {entities[hoveredEntity].block_name && entities[hoveredEntity].type === 'insert' && (
             <span style={{ color: 'var(--text-primary)' }}> | [{entities[hoveredEntity].block_name}]</span>
+          )}
+          {entities[hoveredEntity].attribs && entities[hoveredEntity].attribs.length > 0 && (
+            <span style={{ color: 'var(--text-muted)' }}> | {entities[hoveredEntity].attribs.length} attrs</span>
           )}
           {entities[hoveredEntity].coords.length >= 2 && (
             <span style={{ color: 'var(--text-muted)' }}>
