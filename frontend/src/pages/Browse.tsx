@@ -408,35 +408,24 @@ export default function Browse() {
                     <Loader2 size={24} className="spin" color="var(--accent)" />
                   </div>
                 ) : diff ? (
-                  /* Side-by-side diff view */
-                  <div style={{ display: 'flex', width: '100%', height: '100%', flex: 1 }}>
-                    {/* Template View */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)' }}>
-                      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
-                        {compareMode === 'mod' ? 'Fixed Template' : 'Template'}
-                      </div>
-                      <DXFViewer
-                        entities={diff.template_entities}
-                        boundingBox={diff.bounding_box}
-                        showInfoPanel={false}
-                      />
+                  /* Single view — module DXF with differences highlighted */
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px', backgroundColor: 'var(--bg-secondary)' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {selectedFile?.split('\\').pop()}
+                      </span>
+                      <span style={{ color: 'var(--text-muted)' }}>vs {templatePath?.split('\\').pop()}</span>
+                      {diff.summary.added_count > 0 && <span style={{ color: 'var(--error)' }}>+{diff.summary.added_count} added</span>}
+                      {diff.summary.removed_count > 0 && <span style={{ color: 'var(--warning)' }}>-{diff.summary.removed_count} removed</span>}
                     </div>
-                    {/* Module View with diff highlighting */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
-                        Module (differences highlighted)
-                        {diff.summary.added_count > 0 && <span style={{ color: 'var(--error)', marginLeft: '8px' }}>+{diff.summary.added_count} added</span>}
-                        {diff.summary.removed_count > 0 && <span style={{ color: 'var(--warning)', marginLeft: '8px' }}>-{diff.summary.removed_count} removed</span>}
-                      </div>
-                      <DXFViewer
-                        entities={diff.module_entities}
-                        boundingBox={diff.bounding_box}
-                        highlightAdded={true}
-                        addedSet={new Set(diff.added.map(e => entityKey(e)))}
-                        removedSet={new Set(diff.removed.map(e => entityKey(e)))}
-                        showInfoPanel={false}
-                      />
-                    </div>
+                    <DXFViewer
+                      entities={diff.module_entities}
+                      boundingBox={diff.bounding_box}
+                      highlightAdded={true}
+                      addedSet={new Set(diff.added.map(e => entityKey(e)))}
+                      removedSet={new Set(diff.removed.map(e => entityKey(e)))}
+                      showInfoPanel={true}
+                    />
                   </div>
                 ) : renderData ? (
                   /* Single DXF render (no template found, or just viewing) */
