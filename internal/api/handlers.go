@@ -243,7 +243,7 @@ func (s *Server) runComparisonJob(job *CompareJob, req CompareRequest) {
 		}
 	}
 
-	results := compare.RunComparison(
+	results := compare.RunComparisonParallel(
 		job.TemplateMap,
 		job.SearchFolder,
 		job.OutputFolder,
@@ -252,6 +252,7 @@ func (s *Server) runComparisonJob(job *CompareJob, req CompareRequest) {
 		req.GroupByContent,
 		progressFn,
 		logFn,
+		4, // 4 parallel workers
 	)
 
 	job.mu.Lock()
