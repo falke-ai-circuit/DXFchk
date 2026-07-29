@@ -4,7 +4,7 @@ import {
   RefreshCw, Loader2, GitCompare, Plus, AlertCircle, Wrench, Layers, FileText as FileLog,
 } from 'lucide-react';
 import { useStore } from '../store';
-import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup } from '../api';
+import { api, type TreeNode, type DiffResponse, type DiffEntity, type TemplateGroup, type DXFRenderResponse } from '../api';
 import DXFViewer from '../components/DXFViewer';
 
 export default function Browse() {
@@ -23,6 +23,8 @@ export default function Browse() {
   const [logContent, setLogContent] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [compareMode, setCompareMode] = useState<'template' | 'mod'>('template');
+  const [renderData, setRenderData] = useState<DXFRenderResponse | null>(null);
+  const [renderLoading, setRenderLoading] = useState(false);
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -105,7 +107,18 @@ export default function Browse() {
 
     if (!isDXF) return;
 
-    // For DXF files, find template and show diff
+    // Always load render data so we can see the DXF content visually
+    setRenderData(null);
+    setRenderLoading(true);
+    try {
+      const resp = await api.getDXFRender(filePath);
+      setRenderData(resp);
+    } catch (err) {
+      console.error('Render failed:', err);
+    }
+    setRenderLoading(false);
+
+    // Also find template and show diff
     const tmpl = await findTemplateForFile(filePath);
     setTemplatePath(tmpl);
 
@@ -358,13 +371,15 @@ export default function Browse() {
 
             {/* DXF Viewer with diff highlighting */}
             {!logContent && (
-              <div style={{ flex: 1, overflow: 'auto', display: 'flex', backgroundColor: 'var(--bg-primary)' }}>
-                {diffLoading ? (
+              <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)' }}>
+                {/* Loading indicator */}
+                {(diffLoading || renderLoading) && !diff && !renderData ? (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Loader2 size={24} className="spin" color="var(--accent)" />
                   </div>
                 ) : diff ? (
-                  <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+                  /* Side-by-side diff view */
+                  <div style={{ display: 'flex', width: '100%', height: '100%', flex: 1 }}>
                     {/* Template View */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)' }}>
                       <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}>
@@ -392,6 +407,42 @@ export default function Browse() {
                         showInfoPanel={false}
                       />
                     </div>
+                  </div>
+                ) : renderData ? (
+                  /* Single DXF render (no template found, or just viewing) */
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    {templatePath === null && selectedFile?.toLowerCase().endsWith('.dxf') && (
+                      <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: '16px', fontSize: '12px', backgroundColor: 'var(--bg-elevated)' }}>
+                        <span style={{ color: 'var(--warning)' }}>
+                          <AlertCircle size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                          No matching template found
+                        </span>
+                        <button className="btn btn-primary" style={{ padding: '2px 10px', fontSize: 11 }} onClick={handleCreateTemplate}>
+                          <Plus size={12} />
+                          Create Template
+                        </button>
+                        {selectedFile.includes('_mod') && (
+                          <button className="btn btn-primary" style={{ padding: '2px 10px', fontSize: 11 }} onClick={() => {
+                            const parts = selectedFile.split('\\');
+                            const modFolder = parts.find(p => p.includes('_mod'));
+                            if (modFolder) {
+                              const groupName = modFolder.split('_mod')[0];
+                              handleApplyTemplate(groupName, selectedFile);
+                            }
+                          }}>
+                            <Wrench size={12} />
+                            Apply as Fixed Template to Group
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <DXFViewer
+                      entities={renderData.entities}
+                      boundingBox={renderData.bounding_box}
+                      layers={renderData.layers}
+                      layerColors={renderData.layer_colors || {}}
+                      showInfoPanel={true}
+                    />
                   </div>
                 ) : templatePath === null && selectedFile?.toLowerCase().endsWith('.dxf') ? (
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>

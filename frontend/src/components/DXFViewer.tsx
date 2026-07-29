@@ -234,13 +234,17 @@ export default function DXFViewer({
     }
   }
 
-  // Render an ATTRIB text label inside an INSERT block
+  // Render an ATTRIB text label — at WORLD coordinates (NOT inside the INSERT transform)
   const renderAttrib = (att: DiffAttrib, idx: number): React.ReactNode => {
     const anchor = HALIGN_MAP[att.h_align] || 'start';
     const baseline = VALIGN_MAP[att.v_align] || 'alphabetic';
     const rot = att.rotation || 0;
+    // Minimum font size in screen pixels — text must be readable
+    const screenFontSize = att.height * zoom;
+    const minScreenSize = 7; // 7px minimum readable
+    const actualFontSize = Math.max(att.height, minScreenSize / zoom);
     return (
-      <text key={`att${idx}`} x={att.x} y={-att.y} fill="#ffffff" fontSize={att.height}
+      <text key={`att${idx}`} x={att.x} y={-att.y} fill="#ffffff" fontSize={actualFontSize}
         fontFamily="sans-serif" textAnchor={anchor as any}
         dominantBaseline={baseline as any}
         transform={rot ? `rotate(${-rot} ${att.x} ${-att.y})` : undefined}
@@ -312,25 +316,26 @@ export default function DXFViewer({
         const transform = `translate(${ix} ${iy}) rotate(${-rot}) scale(${sx} ${sy}) translate(${-bx} ${by})`;
 
         return (
-          <g key={i} transform={transform}
-            onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
-          >
-            {/* Render block entities inside the transform */}
-            {e.block_entities?.map((be, bi) => renderEntity(be, i * 1000 + bi))}
-            {/* Fallback: small marker if no block entities */}
-            {(!e.block_entities || e.block_entities.length === 0) && (
-              <rect x={-3 / sx} y={-3 / sy} width={6 / sx} height={6 / sy}
-                fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
-            {/* Render ATTRIB text labels (terminal names, values, formulas) */}
+          <g key={i}>
+            {/* Block geometry inside the INSERT transform */}
+            <g transform={transform}
+              onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
+            >
+              {e.block_entities?.map((be, bi) => renderEntity(be, i * 1000 + bi))}
+              {(!e.block_entities || e.block_entities.length === 0) && (
+                <rect x={-3 / sx} y={-3 / sy} width={6 / sx} height={6 / sy}
+                  fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+            </g>
+            {/* ATTRIB text labels — rendered at WORLD coordinates, OUTSIDE the INSERT transform */}
             {e.attribs?.map((att, ai) => renderAttrib(att, i * 10000 + ai))}
-            {/* Block name label — always visible at zoom > 0.5 */}
-            {zoom > 0.5 && e.block_name && (
-              <text x={2 / sx} y={-2 / sy} fill={color} fontSize={2.5}
-                fontFamily="monospace" opacity={0.7}
-                transform={`scale(${1 / sx} ${1 / sy})`}>
+            {/* Block name label — at world coordinates, readable size */}
+            {e.block_name && (
+              <text x={ix + 3} y={iy - 3} fill={color}
+                fontSize={Math.max(3, 8 / zoom)}
+                fontFamily="monospace" opacity={0.8}>
                 {e.block_name}
               </text>
             )}
@@ -342,14 +347,16 @@ export default function DXFViewer({
         if (e.coords.length < 2 || !e.block_name) return null;
         const tx_ = e.coords[0];
         const ty_ = -e.coords[1];
-        const height = e.text_height || 2.5;
+        const rawHeight = e.text_height || 2.5;
         const rot = e.rotation || 0;
         const hAlign = e.h_align || 0;
         const vAlign = e.v_align || 0;
         const anchor = HALIGN_MAP[hAlign] || 'start';
         const baseline = VALIGN_MAP[vAlign] || 'alphabetic';
+        // Minimum readable font: 7px on screen
+        const actualFontSize = Math.max(rawHeight, 7 / zoom);
         return (
-          <text key={i} x={tx_} y={ty_} fill={color} fontSize={height}
+          <text key={i} x={tx_} y={ty_} fill={color} fontSize={actualFontSize}
             fontFamily="sans-serif" textAnchor={anchor as any}
             dominantBaseline={baseline as any}
             transform={rot ? `rotate(${-rot} ${tx_} ${ty_})` : undefined}
