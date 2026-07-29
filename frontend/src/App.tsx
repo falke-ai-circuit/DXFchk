@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Compare from './pages/Compare';
-import Results from './pages/Results';
+import Browse from './pages/Browse';
 import Settings from './pages/Settings';
 
 function NotFound() {
@@ -23,7 +23,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/compare" element={<Compare />} />
-            <Route path="/results" element={<Results />} />
+            <Route path="/browse" element={<Browse />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<NotFound />} />
           </Route>

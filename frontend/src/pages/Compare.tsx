@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   FolderOpen, Play, Square, Loader2,
   Activity, FileCheck, FileDiff, FileQuestion,
-  ScanLine, GitCompareArrows,
+  ScanLine, GitCompareArrows, RotateCcw,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type CompareStatus } from '../api';
@@ -34,6 +34,7 @@ export default function Compare() {
     scanTemplates,
     templateCount,
     logs,
+    activeProject,
   } = useStore();
 
   const [templateFolder, setTemplateFolder] = useState('');
@@ -49,24 +50,32 @@ export default function Compare() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load settings on mount
+  // Load from active project or settings
   useEffect(() => {
-    fetchSettings().then(() => {
-      const s = useStore.getState().settings;
-      if (s) {
-        setTemplateFolder(s.template_folder || '');
-        setSearchFolder(s.search_folder || '');
-        setOutputFolder(s.output_folder || '');
-        setRecursive(s.recursive ?? true);
-        setMoveFiles(s.move_files ?? false);
-        setGroupByContent(s.group_by_content ?? true);
-      }
-    });
+    if (activeProject) {
+      setTemplateFolder(activeProject.template_folder);
+      setSearchFolder(activeProject.search_folder);
+      setOutputFolder(activeProject.output_folder);
+      setRecursive(activeProject.recursive);
+      setMoveFiles(activeProject.move_files);
+      setGroupByContent(activeProject.group_by_content);
+    } else {
+      fetchSettings().then(() => {
+        const s = useStore.getState().settings;
+        if (s) {
+          setTemplateFolder(s.template_folder || '');
+          setSearchFolder(s.search_folder || '');
+          setOutputFolder(s.output_folder || '');
+          setRecursive(s.recursive ?? true);
+          setMoveFiles(s.move_files ?? false);
+          setGroupByContent(s.group_by_content ?? true);
+        }
+      });
+    }
     fetchCompareStatus();
     fetchTemplates();
-  }, [fetchSettings, fetchCompareStatus, fetchTemplates]);
+  }, [activeProject, fetchSettings, fetchCompareStatus, fetchTemplates]);
 
-  // Poll compare status when running
   useEffect(() => {
     if (compareStatus?.running && !intervalRef.current) {
       intervalRef.current = setInterval(() => {
@@ -81,33 +90,20 @@ export default function Compare() {
     }
   }, [compareStatus?.running, fetchCompareStatus, fetchResults]);
 
-  // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
   const handleStart = async () => {
     setError(null);
     setSuccessMsg(null);
-
-    if (!templateFolder) {
-      setError('Template folder is required');
-      return;
-    }
-    if (!searchFolder) {
-      setError('Search folder is required');
-      return;
-    }
+    if (!templateFolder) { setError('Template folder is required'); return; }
+    if (!searchFolder) { setError('Search folder is required'); return; }
 
     setScanning(true);
     try {
-      // Step 1: Scan templates
       await scanTemplates(templateFolder, recursive);
       setScanning(false);
-
-      // Step 2: Start comparison
       setComparing(true);
       const result = await api.startCompare({
         search_folder: searchFolder,
@@ -116,8 +112,6 @@ export default function Compare() {
         group_by_content: groupByContent,
       });
       setSuccessMsg(result.message || 'Comparison started');
-
-      // Start polling
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(() => {
         fetchCompareStatus();
@@ -130,21 +124,26 @@ export default function Compare() {
     }
   };
 
-  const handleStop = async () => {
-    // The API doesn't have an explicit stop endpoint, but we can stop polling
-    // and set the local state. The backend will finish current processing.
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+  const handleStop = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     setComparing(false);
     setSuccessMsg('Comparison stopped by user');
     fetchCompareStatus();
   };
 
-  const matched = useStore.getState().results.filter(r => r.status === 'match').length;
-  const different = useStore.getState().results.filter(r => r.status === 'different').length;
-  const noTemplate = useStore.getState().results.filter(r => r.status === 'no_template').length;
+  const handleReset = () => {
+    setComparing(false);
+    setScanning(false);
+    setError(null);
+    setSuccessMsg(null);
+    fetchCompareStatus();
+    fetchResults();
+  };
+
+  const results = useStore.getState().results;
+  const matched = results.filter(r => r.status === 'match').length;
+  const different = results.filter(r => r.status === 'different').length;
+  const noTemplate = results.filter(r => r.status === 'no_template').length;
 
   const cs: CompareStatus | null = compareStatus;
   const progress = cs?.progress ?? 0;
@@ -153,142 +152,94 @@ export default function Compare() {
     <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
       <h1 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '24px' }}>Compare DXF Files</h1>
 
-      {/* Error/Success Messages */}
+      {/* Active project indicator */}
+      {activeProject && (
+        <div style={{ marginBottom: '16px', padding: '8px 12px', background: 'rgba(0,138,0,0.08)', borderRadius: 6, fontSize: 12, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <FolderOpen size={14} />
+          Project: <strong>{activeProject.name}</strong>
+        </div>
+      )}
+
       {error && (
-        <div style={{
-          background: 'rgba(239,68,68,0.1)',
-          border: '1px solid rgba(239,68,68,0.3)',
-          borderRadius: 8,
-          padding: '12px 16px',
-          marginBottom: '16px',
-          color: 'var(--error)',
-          fontSize: 13,
-        }}>
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '12px 16px', marginBottom: '16px', color: 'var(--error)', fontSize: 13 }}>
           {error}
         </div>
       )}
       {successMsg && !error && (
-        <div style={{
-          background: 'rgba(16,185,129,0.1)',
-          border: '1px solid rgba(16,185,129,0.3)',
-          borderRadius: 8,
-          padding: '12px 16px',
-          marginBottom: '16px',
-          color: 'var(--success)',
-          fontSize: 13,
-        }}>
+        <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 8, padding: '12px 16px', marginBottom: '16px', color: 'var(--success)', fontSize: 13 }}>
           {successMsg}
         </div>
       )}
 
-      {/* Folder Selection */}
+      {/* Folder Selection — matches Python GUI */}
       <div className="card" style={{ marginBottom: '16px' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <FolderOpen size={16} color="var(--accent)" />
           Folder Selection
         </h2>
-
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
-            <label style={labelStyle}>Template Folder</label>
-            <input
-              type="text"
-              value={templateFolder}
-              onChange={(e) => setTemplateFolder(e.target.value)}
-              placeholder="C:\path\to\templates"
-              style={inputStyle}
-            />
+            <label style={labelStyle}>Template Folder — contains original DXF templates</label>
+            <input type="text" value={templateFolder} onChange={(e) => setTemplateFolder(e.target.value)} placeholder="C:\path\to\templates" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Search Folder</label>
-            <input
-              type="text"
-              value={searchFolder}
-              onChange={(e) => setSearchFolder(e.target.value)}
-              placeholder="C:\path\to\search"
-              style={inputStyle}
-            />
+            <label style={labelStyle}>Search Folder — contains DXF files to compare</label>
+            <input type="text" value={searchFolder} onChange={(e) => setSearchFolder(e.target.value)} placeholder="C:\path\to\search" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Output Folder (optional)</label>
-            <input
-              type="text"
-              value={outputFolder}
-              onChange={(e) => setOutputFolder(e.target.value)}
-              placeholder="C:\path\to\output"
-              style={inputStyle}
-            />
+            <label style={labelStyle}>Output Folder — where results are saved</label>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
+              Identical files → template folders · Different files → _mod folders · No template → 'notemplate' folder
+            </div>
+            <input type="text" value={outputFolder} onChange={(e) => setOutputFolder(e.target.value)} placeholder="C:\path\to\output" style={inputStyle} />
           </div>
         </div>
       </div>
 
-      {/* Options */}
+      {/* Options — matches Python GUI checkboxes */}
       <div className="card" style={{ marginBottom: '16px' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Options</h2>
-        <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={recursive}
-              onChange={(e) => setRecursive(e.target.checked)}
-            />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Recursive scan</span>
+            <input type="checkbox" checked={recursive} onChange={(e) => setRecursive(e.target.checked)} />
+            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Search Subdirectories</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— search recursively in all subfolders</span>
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={groupByContent}
-              onChange={(e) => setGroupByContent(e.target.checked)}
-            />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Group by content</span>
+            <input type="checkbox" checked={groupByContent} onChange={(e) => setGroupByContent(e.target.checked)} />
+            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Group by Content Differences</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— different files grouped into _modN folders by content hash</span>
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={moveFiles}
-              onChange={(e) => setMoveFiles(e.target.checked)}
-            />
+            <input type="checkbox" checked={moveFiles} onChange={(e) => setMoveFiles(e.target.checked)} />
             <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>Move files to output</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>— original files in search folder are preserved when unchecked</span>
           </label>
         </div>
       </div>
 
-      {/* Action Buttons */}
+      {/* Action Buttons — matches Python GUI layout */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        <button
-          className="btn btn-primary"
-          onClick={handleStart}
-          disabled={scanning || comparing}
-        >
+        <button className="btn btn-primary" onClick={handleStart} disabled={scanning || comparing}>
           {scanning ? <Loader2 size={16} className="spin" /> : <Play size={16} />}
-          {scanning ? 'Scanning Templates...' : comparing ? 'Comparing...' : 'Start Comparison'}
+          {scanning ? 'Scanning Templates...' : comparing ? 'Comparing...' : 'Start'}
         </button>
-        <button
-          className="btn btn-danger"
-          onClick={handleStop}
-          disabled={!comparing}
-        >
+        <button className="btn btn-danger" onClick={handleStop} disabled={!comparing}>
           <Square size={16} />
           Stop
         </button>
+        <button className="btn btn-secondary" onClick={handleReset}>
+          <RotateCcw size={16} />
+          Reset Session
+        </button>
       </div>
 
-      {/* Progress Bars */}
+      {/* Progress Section — matches Python GUI */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        <ProgressCard
-          title="Template Scanning"
-          icon={<ScanLine size={14} />}
-          progress={scanning ? 50 : templateCount > 0 ? 100 : 0}
-          label={scanning ? 'Scanning...' : `${templateCount} templates`}
-          active={scanning}
-        />
-        <ProgressCard
-          title="Comparison Progress"
-          icon={<GitCompareArrows size={14} />}
-          progress={progress}
-          label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'}
-          active={cs?.running ?? false}
-        />
+        <div style={{ display: 'flex', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
+          <ProgressCard title="Templates" icon={<ScanLine size={14} />} progress={scanning ? 50 : templateCount > 0 ? 100 : 0} label={scanning ? 'Scanning...' : `${templateCount} loaded`} active={scanning} />
+          <ProgressCard title="Comparison" icon={<GitCompareArrows size={14} />} progress={progress} label={cs?.running ? `${cs.processed_files} / ${cs.total_files} (${progress.toFixed(1)}%)` : 'Idle'} active={cs?.running ?? false} />
+        </div>
       </div>
 
       {/* Summary Stats */}
@@ -298,31 +249,16 @@ export default function Compare() {
         <MiniStat icon={<FileQuestion size={16} />} label="No Template" value={noTemplate} color="var(--text-muted)" />
       </div>
 
-      {/* Live Log Area */}
+      {/* Live Log — matches Python GUI log section */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '12px 16px',
-          borderBottom: '1px solid var(--border)',
-          backgroundColor: 'var(--bg-secondary)',
-        }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
           <Activity size={16} color="var(--accent)" />
-          <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Live Log</h2>
+          <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Log</h2>
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
             {logs.length} entries
           </span>
         </div>
-        <div style={{
-          padding: '12px 16px',
-          maxHeight: '350px',
-          overflowY: 'auto',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '12px',
-          color: 'var(--text-secondary)',
-          lineHeight: 1.6,
-        }}>
+        <div style={{ padding: '12px 16px', maxHeight: '350px', overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
           {logs.length === 0 ? (
             <span style={{ color: 'var(--text-muted)' }}>No logs yet. Start a comparison to see real-time output.</span>
           ) : (
@@ -341,7 +277,7 @@ export default function Compare() {
 
 function ProgressCard({ title, icon, progress, label, active }: { title: string; icon: React.ReactNode; progress: number; label: string; active: boolean }) {
   return (
-    <div className="card">
+    <div className="card" style={{ flex: 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
         {active && <Loader2 size={12} className="spin" color="var(--accent)" />}
         {icon}

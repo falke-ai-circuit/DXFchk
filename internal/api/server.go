@@ -79,6 +79,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/compare", s.handleCompare)
 	s.mux.HandleFunc("GET /api/v1/compare/status", s.handleCompareStatus)
 	s.mux.HandleFunc("GET /api/v1/results", s.handleResults)
+	s.mux.HandleFunc("GET /api/v1/projects", s.handleProjects)
+	s.mux.HandleFunc("POST /api/v1/projects", s.handleProjects)
+	s.mux.HandleFunc("GET /api/v1/project", s.handleProject)
+	s.mux.HandleFunc("POST /api/v1/project", s.handleProject)
+	s.mux.HandleFunc("DELETE /api/v1/project", s.handleProject)
+	s.mux.HandleFunc("GET /api/v1/browse", s.handleBrowse)
+	s.mux.HandleFunc("GET /api/v1/browse/folder", s.handleBrowseFolder)
+	s.mux.HandleFunc("POST /api/v1/diff", s.handleDXFDiff)
+	s.mux.HandleFunc("POST /api/v1/template/create", s.handleCreateTemplate)
 }
 
 // ServeHTTP implements http.Handler

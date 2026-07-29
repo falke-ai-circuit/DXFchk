@@ -1,129 +1,116 @@
 import { create } from 'zustand';
-import type {
-  HealthResponse,
-  SettingsResponse,
-  CompareStatus,
-  ComparisonResult,
-  TemplateMapping,
-} from './api';
-import { api } from './api';
+import { api, type HealthResponse, type CompareStatus, type ComparisonResult, type Project, type SettingsResponse } from './api';
 
-interface DXFStore {
+interface StoreState {
   // Health
   health: HealthResponse | null;
-  healthLoading: boolean;
+  fetchHealth: () => Promise<void>;
 
   // Settings
   settings: SettingsResponse | null;
-  settingsLoading: boolean;
+  fetchSettings: () => Promise<void>;
+  saveSettings: (settings: SettingsResponse) => Promise<void>;
+
+  // Projects
+  projects: Project[];
+  activeProject: Project | null;
+  fetchProjects: () => Promise<void>;
+  selectProject: (id: string) => Promise<void>;
+  createProject: (data: { name: string; template_folder: string; search_folder: string; output_folder?: string; recursive?: boolean; group_by_content?: boolean }) => Promise<Project>;
+  deleteProject: (id: string) => Promise<void>;
+
+  // Compare
+  compareStatus: CompareStatus | null;
+  fetchCompareStatus: () => Promise<void>;
+  results: ComparisonResult[];
+  fetchResults: () => Promise<void>;
 
   // Templates
   templateCount: number;
-  templateMapping: TemplateMapping;
-  templatesLoading: boolean;
-
-  // Compare state
-  compareStatus: CompareStatus | null;
-  compareRunning: boolean;
-
-  // Results
-  results: ComparisonResult[];
-  resultsLoading: boolean;
+  fetchTemplates: () => Promise<void>;
+  scanTemplates: (folder: string, recursive: boolean) => Promise<void>;
 
   // Logs
   logs: string[];
-
-  // Actions
-  fetchHealth: () => Promise<void>;
-  fetchSettings: () => Promise<void>;
-  saveSettings: (s: SettingsResponse) => Promise<void>;
-  scanTemplates: (templateFolder: string, recursive: boolean) => Promise<void>;
-  fetchTemplates: () => Promise<void>;
-  fetchCompareStatus: () => Promise<void>;
-  fetchResults: () => Promise<void>;
-  setLogs: (logs: string[]) => void;
-  clearLogs: () => void;
 }
 
-export const useStore = create<DXFStore>((set) => ({
+export const useStore = create<StoreState>((set, get) => ({
   health: null,
-  healthLoading: false,
-  settings: null,
-  settingsLoading: false,
-  templateCount: 0,
-  templateMapping: {},
-  templatesLoading: false,
-  compareStatus: null,
-  compareRunning: false,
-  results: [],
-  resultsLoading: false,
-  logs: [],
-
   fetchHealth: async () => {
-    set({ healthLoading: true });
     try {
       const h = await api.health();
-      set({ health: h, healthLoading: false });
-    } catch {
-      set({ health: null, healthLoading: false });
-    }
+      set({ health: h });
+    } catch { /* ignore */ }
   },
 
+  settings: null,
   fetchSettings: async () => {
-    set({ settingsLoading: true });
     try {
       const s = await api.getSettings();
-      set({ settings: s, settingsLoading: false });
-    } catch {
-      set({ settings: null, settingsLoading: false });
-    }
+      set({ settings: s });
+    } catch { /* ignore */ }
+  },
+  saveSettings: async (settings: SettingsResponse) => {
+    await api.saveSettings(settings);
+    set({ settings });
   },
 
-  saveSettings: async (s: SettingsResponse) => {
-    const saved = await api.saveSettings(s);
-    set({ settings: saved });
-  },
-
-  scanTemplates: async (templateFolder: string, recursive: boolean) => {
-    set({ templatesLoading: true });
+  projects: [],
+  activeProject: null,
+  fetchProjects: async () => {
     try {
-      const r = await api.scanTemplates({ template_folder: templateFolder, recursive });
-      set({ templateCount: r.count, templateMapping: r.mapping, templatesLoading: false });
-    } catch {
-      set({ templatesLoading: false });
-      throw new Error('Failed to scan templates');
-    }
+      const resp = await api.getProjects();
+      set({ projects: resp.projects });
+      if (resp.active_id) {
+        const active = resp.projects.find(p => p.id === resp.active_id);
+        if (active) set({ activeProject: active });
+      }
+    } catch { /* ignore */ }
   },
-
-  fetchTemplates: async () => {
-    set({ templatesLoading: true });
+  selectProject: async (id: string) => {
     try {
-      const r = await api.getTemplates();
-      set({ templateCount: r.count, templateMapping: r.mapping, templatesLoading: false });
-    } catch {
-      set({ templatesLoading: false });
-    }
+      const resp = await api.getProject(id);
+      set({ activeProject: resp.project });
+    } catch { /* ignore */ }
+  },
+  createProject: async (data) => {
+    const resp = await api.createProject(data);
+    set({ activeProject: resp.project });
+    await get().fetchProjects();
+    return resp.project;
+  },
+  deleteProject: async (id: string) => {
+    await api.deleteProject(id);
+    await get().fetchProjects();
   },
 
+  compareStatus: null,
   fetchCompareStatus: async () => {
     try {
       const s = await api.getCompareStatus();
-      set({ compareStatus: s, compareRunning: s.running, logs: s.recent_logs || [] });
-    } catch {
-      // ignore
-    }
+      set({ compareStatus: s, logs: s.recent_logs || [] });
+    } catch { /* ignore */ }
   },
 
+  results: [],
   fetchResults: async () => {
-    set({ resultsLoading: true });
     try {
       const r = await api.getResults();
-      set({ results: r.results || [], resultsLoading: false });
-    } catch {
-      set({ resultsLoading: false });
-    }
+      set({ results: r.results || [] });
+    } catch { /* ignore */ }
   },
 
-  setLogs: (logs: string[]) => set({ logs }),
-  clearLogs: () => set({ logs: [] }),
+  templateCount: 0,
+  fetchTemplates: async () => {
+    try {
+      const t = await api.getTemplates();
+      set({ templateCount: t.count });
+    } catch { /* ignore */ }
+  },
+  scanTemplates: async (folder: string, recursive: boolean) => {
+    const resp = await api.scanTemplates({ template_folder: folder, recursive });
+    set({ templateCount: resp.count });
+  },
+
+  logs: [],
 }));

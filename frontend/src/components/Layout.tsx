@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, GitCompareArrows, ListCheck, Settings, FileSearch } from 'lucide-react';
+import { LayoutDashboard, GitCompareArrows, FolderTree, Settings, FileSearch } from 'lucide-react';
 
 export default function Layout() {
   const tabStyle = (isActive: boolean): React.CSSProperties => ({
@@ -58,9 +58,9 @@ export default function Layout() {
           Compare
         </NavLink>
 
-        <NavLink to="/results" style={({ isActive }) => tabStyle(isActive)}>
-          <ListCheck size={14} />
-          Results
+        <NavLink to="/browse" style={({ isActive }) => tabStyle(isActive)}>
+          <FolderTree size={14} />
+          Browse
         </NavLink>
 
         <NavLink to="/settings" style={({ isActive }) => tabStyle(isActive)}>
@@ -88,7 +88,6 @@ export default function Layout() {
 }
 
 function HealthIndicator() {
-  // We'll use a simple inline fetch approach to avoid circular deps with the store
   const [status, setStatus] = React.useState<'ok' | 'err' | 'loading'>('loading');
 
   React.useEffect(() => {
