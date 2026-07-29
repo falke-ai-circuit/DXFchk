@@ -55,7 +55,7 @@ func ReadFromReader(r io.Reader) (*Drawing, error) {
 		if err != nil {
 			continue // skip malformed lines
 		}
-		pairs = append(pairs, CodePair{Code: code, Value: valueLine})
+		pairs = append(pairs, CodePair{Code: code, Value: strings.TrimRight(valueLine, "\r")})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading DXF: %w", err)
@@ -77,7 +77,7 @@ func parsePairs(pairs []CodePair) *Drawing {
 		// Track sections
 		if p.Code == 0 && p.Value == "SECTION" {
 			if i+1 < len(pairs) && pairs[i+1].Code == 2 {
-				if pairs[i+1].Value == "ENTITIES" {
+				if strings.TrimSpace(pairs[i+1].Value) == "ENTITIES" {
 					inEntities = true
 				}
 			}
@@ -130,11 +130,11 @@ func parsePairs(pairs []CodePair) *Drawing {
 						}
 					}
 					if hasAttribs {
-						currentInsert = &d.Entities[len(d.Entities)-1]
+							currentInsert = &d.Entities[len(d.Entities)-1]
+						}
 					}
-				}
-			}
-		}
+					}
+					}
 	}
 
 	return d

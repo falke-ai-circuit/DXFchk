@@ -81,7 +81,14 @@ func (c *ComparisonProcessor) log(msg string) {
 
 // ProcessFile processes a single DXF file, comparing it to templates.
 // Port of Python process_file()
-func (c *ComparisonProcessor) ProcessFile(dxfFile string) Result {
+// Recovers from panics to prevent one bad DXF from crashing the entire run.
+func (c *ComparisonProcessor) ProcessFile(dxfFile string) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.log(fmt.Sprintf("ERROR: panic processing %s: %v", filepath.Base(dxfFile), r))
+			result = Result{FileName: filepath.Base(dxfFile), Template: "error", Status: "error"}
+		}
+	}()
 	fileName := filepath.Base(dxfFile)
 	c.log(fmt.Sprintf("Processing: %s", fileName))
 

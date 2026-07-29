@@ -42,15 +42,22 @@ func BuildTemplateMap(templateDir string, recursive bool, progressFn func(int, i
 		}
 
 		// Parse DXF and extract $(TEMPLATE) attribute
-		drawing, err := dxf.ReadFile(f)
-		if err != nil {
-			continue
-		}
-
-		templateName := drawing.GetTemplateAttribute()
-		if templateName != "" {
-			templateMap[templateName] = f
-		}
+		// Recover from panics on malformed files
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Skip this file on panic
+				}
+			}()
+			drawing, err := dxf.ReadFile(f)
+			if err != nil {
+				return
+			}
+			templateName := drawing.GetTemplateAttribute()
+			if templateName != "" {
+				templateMap[templateName] = f
+			}
+		}()
 	}
 
 	if progressFn != nil {
