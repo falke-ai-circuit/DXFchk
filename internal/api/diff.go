@@ -14,12 +14,25 @@ import (
 
 // DiffEntity represents a single entity difference for visualization
 type DiffEntity struct {
-	Type       string     `json:"type"`       // "line", "insert", "lwpolyline", "polyline"
-	Status     string     `json:"status"`     // "added", "removed", "modified"
+	Type       string     `json:"type"`       // "line", "insert", "lwpolyline", "polyline", "text", "circle", "arc", "point"
+	Status     string     `json:"status"`     // "added", "removed", "modified", "same"
 	Coords     []float64  `json:"coords"`     // flattened coordinates [x1,y1,x2,y2,...]
 	Coords2D   [][]float64 `json:"coords_2d"`  // [[x,y], [x,y], ...]
 	BlockName  string     `json:"block_name"` // for INSERT entities
 	Layer      string     `json:"layer"`
+	Color      int        `json:"color"`      // ACI color index (0=ByBlock, 256=ByLayer)
+	Rotation    float64   `json:"rotation"`   // rotation angle in degrees
+	ScaleX     float64    `json:"scale_x"`    // INSERT scale X
+	ScaleY     float64    `json:"scale_y"`    // INSERT scale Y
+	HAlign     int        `json:"h_align"`    // text horizontal alignment (72)
+	VAlign     int        `json:"v_align"`    // text vertical alignment (73)
+	TextHeight float64    `json:"text_height"` // text height (code 40)
+	Bulges     []float64  `json:"bulges"`     // LWPOLYLINE bulge values per vertex
+	Closed     bool       `json:"closed"`     // LWPOLYLINE closed flag
+	// Block rendering data (for INSERT entities)
+	BlockEntities []*DiffEntity `json:"block_entities,omitempty"` // entities from block definition
+	BlockBaseX    float64       `json:"block_base_x,omitempty"`
+	BlockBaseY    float64       `json:"block_base_y,omitempty"`
 }
 
 // DiffResponse is the comparison result between template and module DXF
@@ -119,58 +132,70 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 	if err != nil {
 		return nil, err
 	}
+	return extractFromDrawing(drawing), nil
+}
 
+// extractFromDrawing converts parsed DXF drawing to DiffEntity list
+func extractFromDrawing(drawing *dxf.Drawing) []*DiffEntity {
 	var entities []*DiffEntity
 
 	for _, ent := range drawing.Entities {
 		typ := strings.TrimSpace(ent.Type)
+		layer := ent.GetStringValue(8)
+		color := ent.GetIntValue(62) // 0=ByBlock, 256=ByLayer, absent=ByLayer
+		if color == 0 && !hasCode(ent.Pairs, 62) {
+			color = 256 // default ByLayer when code 62 absent
+		}
+
 		switch typ {
 		case "LINE":
 			sx := ent.GetFloatValue(10)
 			sy := ent.GetFloatValue(20)
 			ex := ent.GetFloatValue(11)
 			ey := ent.GetFloatValue(21)
-			layer := ent.GetStringValue(8)
 			e := &DiffEntity{
-				Type:      "line",
-				Status:    "same",
-				Layer:     layer,
-				Coords:    []float64{sx, sy, ex, ey},
-				Coords2D:  [][]float64{{sx, sy}, {ex, ey}},
+				Type:   "line",
+				Status: "same",
+				Layer:  layer,
+				Color:  color,
+				Coords: []float64{sx, sy, ex, ey},
 			}
 			entities = append(entities, e)
 
 		case "LWPOLYLINE":
-			layer := ent.GetStringValue(8)
 			e := &DiffEntity{
 				Type:   "lwpolyline",
 				Status: "same",
 				Layer:  layer,
+				Color:  color,
+				Closed: ent.GetIntValue(70)&1 != 0,
 			}
 			var curX, curY float64
-			xCount, yCount := 0, 0
 			for _, p := range ent.Pairs {
 				switch p.Code {
 				case 10:
 					curX = parseFloatStr(p.Value)
-					xCount++
 				case 20:
 					curY = parseFloatStr(p.Value)
-					yCount++
-					if xCount == yCount {
-						e.Coords = append(e.Coords, curX, curY)
-						e.Coords2D = append(e.Coords2D, []float64{curX, curY})
-					}
+					e.Coords = append(e.Coords, curX, curY)
+					e.Coords2D = append(e.Coords2D, []float64{curX, curY})
+				case 42:
+					e.Bulges = append(e.Bulges, parseFloatStr(p.Value))
 				}
+			}
+			// Pad bulges to match vertex count
+			for len(e.Bulges) < len(e.Coords2D) {
+				e.Bulges = append(e.Bulges, 0)
 			}
 			entities = append(entities, e)
 
 		case "POLYLINE":
-			layer := ent.GetStringValue(8)
 			e := &DiffEntity{
 				Type:   "polyline",
 				Status: "same",
 				Layer:  layer,
+				Color:  color,
+				Closed: ent.GetIntValue(70)&1 != 0,
 			}
 			var curX, curY float64
 			headerOriginSkipped := false
@@ -187,7 +212,12 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 						e.Coords = append(e.Coords, curX, curY)
 						e.Coords2D = append(e.Coords2D, []float64{curX, curY})
 					}
+				case 42:
+					e.Bulges = append(e.Bulges, parseFloatStr(p.Value))
 				}
+			}
+			for len(e.Bulges) < len(e.Coords2D) {
+				e.Bulges = append(e.Bulges, 0)
 			}
 			entities = append(entities, e)
 
@@ -198,9 +228,7 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 			}
 			ix := ent.GetFloatValue(10)
 			iy := ent.GetFloatValue(20)
-			layer := ent.GetStringValue(8)
-			// Get rotation angle (code 50) and scale (codes 41/42)
-			rot := ent.GetFloatValue(50)
+			rot := ent.GetFloatValue(50) * 180 / math.Pi // radians → degrees
 			sx := ent.GetFloatValue(41)
 			sy := ent.GetFloatValue(42)
 			if sx == 0 {
@@ -214,31 +242,54 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 				Status:    "same",
 				BlockName: blockName,
 				Layer:     layer,
+				Color:     color,
 				Coords:    []float64{ix, iy},
 				Coords2D:  [][]float64{{ix, iy}},
+				Rotation:  rot,
+				ScaleX:    sx,
+				ScaleY:    sy,
 			}
-			_ = rot // rotation stored but not yet rendered
-			_ = sx
-			_ = sy
+			// Resolve block entities from BLOCKS section
+			if block, ok := drawing.Blocks[strings.ToUpper(blockName)]; ok {
+				e.BlockBaseX = block.BaseX
+				e.BlockBaseY = block.BaseY
+				blockEnts := extractFromEntities(block.Entities, drawing)
+				e.BlockEntities = blockEnts
+			}
 			entities = append(entities, e)
 
 		case "TEXT", "MTEXT":
 			tx := ent.GetFloatValue(10)
 			ty := ent.GetFloatValue(20)
 			text := ent.GetStringValue(1)
-			layer := ent.GetStringValue(8)
 			height := ent.GetFloatValue(40)
 			if height == 0 {
-				height = 2.5 // default text height
+				height = 2.5
 			}
-			rot := ent.GetFloatValue(50)
+			rot := ent.GetFloatValue(50) * 180 / math.Pi
+			hAlign := ent.GetIntValue(72)
+			vAlign := ent.GetIntValue(73)
+			// Alignment point (code 11/21) used when hAlign or vAlign nonzero
+			if hAlign != 0 || vAlign != 0 {
+				ax := ent.GetFloatValue(11)
+				ay := ent.GetFloatValue(21)
+				if ax != 0 || ay != 0 {
+					tx = ax
+					ty = ay
+				}
+			}
 			e := &DiffEntity{
-				Type:      "text",
-				Status:    "same",
-				Layer:     layer,
-				BlockName: text, // reuse BlockName for text content
-				Coords:    []float64{tx, ty},
-				Coords2D:  [][]float64{{tx, ty}, {height}, {rot}},
+				Type:       "text",
+				Status:     "same",
+				Layer:      layer,
+				Color:      color,
+				BlockName:  text,
+				Coords:     []float64{tx, ty},
+				Coords2D:   [][]float64{{tx, ty}},
+				Rotation:   rot,
+				TextHeight: height,
+				HAlign:     hAlign,
+				VAlign:     vAlign,
 			}
 			entities = append(entities, e)
 
@@ -246,13 +297,12 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 			cx := ent.GetFloatValue(10)
 			cy := ent.GetFloatValue(20)
 			radius := ent.GetFloatValue(40)
-			layer := ent.GetStringValue(8)
 			e := &DiffEntity{
 				Type:   "circle",
 				Status: "same",
 				Layer:  layer,
+				Color:  color,
 				Coords: []float64{cx, cy, radius},
-				Coords2D: [][]float64{{cx, cy}, {radius}},
 			}
 			entities = append(entities, e)
 
@@ -262,44 +312,174 @@ func extractEntities(path string) ([]*DiffEntity, error) {
 			radius := ent.GetFloatValue(40)
 			startAng := ent.GetFloatValue(50) * math.Pi / 180
 			endAng := ent.GetFloatValue(51) * math.Pi / 180
-			layer := ent.GetStringValue(8)
-			// Generate arc points
 			segments := 32
 			var coords []float64
-			var coords2D [][]float64
 			for i := 0; i <= segments; i++ {
 				t := float64(i) / float64(segments)
 				ang := startAng + t*(endAng-startAng)
 				x := cx + radius*math.Cos(ang)
 				y := cy + radius*math.Sin(ang)
 				coords = append(coords, x, y)
-				coords2D = append(coords2D, []float64{x, y})
 			}
 			e := &DiffEntity{
-				Type:     "arc",
-				Status:   "same",
-				Layer:    layer,
-				Coords:   coords,
-				Coords2D: coords2D,
+				Type:   "arc",
+				Status: "same",
+				Layer:  layer,
+				Color:  color,
+				Coords: coords,
 			}
 			entities = append(entities, e)
 
 		case "POINT":
 			px := ent.GetFloatValue(10)
 			py := ent.GetFloatValue(20)
-			layer := ent.GetStringValue(8)
 			e := &DiffEntity{
-				Type:     "point",
-				Status:   "same",
-				Layer:    layer,
-				Coords:   []float64{px, py},
-				Coords2D: [][]float64{{px, py}},
+				Type:   "point",
+				Status: "same",
+				Layer:  layer,
+				Color:  color,
+				Coords: []float64{px, py},
 			}
 			entities = append(entities, e)
 		}
 	}
 
-	return entities, nil
+	return entities
+}
+
+// extractFromEntities converts raw Entity list (from block definitions) to DiffEntity
+func extractFromEntities(ents []dxf.Entity, drawing *dxf.Drawing) []*DiffEntity {
+	var result []*DiffEntity
+	for _, ent := range ents {
+		typ := strings.TrimSpace(ent.Type)
+		layer := ent.GetStringValue(8)
+		color := ent.GetIntValue(62)
+		if color == 0 && !hasCode(ent.Pairs, 62) {
+			color = 256
+		}
+
+		switch typ {
+		case "LINE":
+			sx := ent.GetFloatValue(10)
+			sy := ent.GetFloatValue(20)
+			ex := ent.GetFloatValue(11)
+			ey := ent.GetFloatValue(21)
+			result = append(result, &DiffEntity{
+				Type: "line", Status: "same", Layer: layer, Color: color,
+				Coords: []float64{sx, sy, ex, ey},
+			})
+		case "LWPOLYLINE":
+			e := &DiffEntity{
+				Type: "lwpolyline", Status: "same", Layer: layer, Color: color,
+				Closed: ent.GetIntValue(70)&1 != 0,
+			}
+			var curX, curY float64
+			for _, p := range ent.Pairs {
+				if p.Code == 10 {
+					curX = parseFloatStr(p.Value)
+				} else if p.Code == 20 {
+					curY = parseFloatStr(p.Value)
+					e.Coords = append(e.Coords, curX, curY)
+					e.Coords2D = append(e.Coords2D, []float64{curX, curY})
+				} else if p.Code == 42 {
+					e.Bulges = append(e.Bulges, parseFloatStr(p.Value))
+				}
+			}
+			for len(e.Bulges) < len(e.Coords2D) {
+				e.Bulges = append(e.Bulges, 0)
+			}
+			result = append(result, e)
+		case "POLYLINE":
+			e := &DiffEntity{
+				Type: "polyline", Status: "same", Layer: layer, Color: color,
+				Closed: ent.GetIntValue(70)&1 != 0,
+			}
+			var curX, curY float64
+			headerOriginSkipped := false
+			for _, p := range ent.Pairs {
+				switch p.Code {
+				case 10:
+					curX = parseFloatStr(p.Value)
+				case 20:
+					curY = parseFloatStr(p.Value)
+				case 30:
+					if !headerOriginSkipped {
+						headerOriginSkipped = true
+					} else {
+						e.Coords = append(e.Coords, curX, curY)
+						e.Coords2D = append(e.Coords2D, []float64{curX, curY})
+					}
+				case 42:
+					e.Bulges = append(e.Bulges, parseFloatStr(p.Value))
+				}
+			}
+			for len(e.Bulges) < len(e.Coords2D) {
+				e.Bulges = append(e.Bulges, 0)
+			}
+			result = append(result, e)
+		case "TEXT", "MTEXT":
+			tx := ent.GetFloatValue(10)
+			ty := ent.GetFloatValue(20)
+			text := ent.GetStringValue(1)
+			height := ent.GetFloatValue(40)
+			if height == 0 {
+				height = 2.5
+			}
+			rot := ent.GetFloatValue(50) * 180 / math.Pi
+			hAlign := ent.GetIntValue(72)
+			vAlign := ent.GetIntValue(73)
+			if hAlign != 0 || vAlign != 0 {
+				ax := ent.GetFloatValue(11)
+				ay := ent.GetFloatValue(21)
+				if ax != 0 || ay != 0 {
+					tx = ax
+					ty = ay
+				}
+			}
+			result = append(result, &DiffEntity{
+				Type: "text", Status: "same", Layer: layer, Color: color,
+				BlockName: text, Coords: []float64{tx, ty},
+				Rotation: rot, TextHeight: height,
+				HAlign: hAlign, VAlign: vAlign,
+			})
+		case "CIRCLE":
+			cx := ent.GetFloatValue(10)
+			cy := ent.GetFloatValue(20)
+			radius := ent.GetFloatValue(40)
+			result = append(result, &DiffEntity{
+				Type: "circle", Status: "same", Layer: layer, Color: color,
+				Coords: []float64{cx, cy, radius},
+			})
+		case "ARC":
+			cx := ent.GetFloatValue(10)
+			cy := ent.GetFloatValue(20)
+			radius := ent.GetFloatValue(40)
+			startAng := ent.GetFloatValue(50) * math.Pi / 180
+			endAng := ent.GetFloatValue(51) * math.Pi / 180
+			segments := 32
+			var coords []float64
+			for i := 0; i <= segments; i++ {
+				t := float64(i) / float64(segments)
+				ang := startAng + t*(endAng-startAng)
+				coords = append(coords, cx+radius*math.Cos(ang), cy+radius*math.Sin(ang))
+			}
+			result = append(result, &DiffEntity{
+				Type: "arc", Status: "same", Layer: layer, Color: color,
+				Coords: coords,
+			})
+		}
+	}
+	return result
+}
+
+// hasCode checks if a code exists in pairs
+func hasCode(pairs []dxf.CodePair, code int) bool {
+	for _, p := range pairs {
+		if p.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // parseFloatStr parses a float string

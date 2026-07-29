@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/falke-ai-circuit/DXFchk/internal/dxf"
 )
 
 // handleDXFRender returns all entities from a single DXF file for visual rendering
@@ -38,6 +40,15 @@ func (s *Server) handleDXFRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Also extract layer colors from the drawing
+	drawing, _ := dxf.ReadFile(path)
+	layerColors := make(map[string]int)
+	if drawing != nil {
+		for name, layer := range drawing.Layers {
+			layerColors[name] = layer.Color
+		}
+	}
+
 	bbox := computeBoundingBox(entities)
 
 	// Count entity types
@@ -65,6 +76,7 @@ func (s *Server) handleDXFRender(w http.ResponseWriter, r *http.Request) {
 		"type_counts":   typeCounts,
 		"layers":        layers,
 		"layer_count":   len(layers),
+		"layer_colors":  layerColors,
 		"path":          path,
 		"name":          filepath.Base(path),
 	})

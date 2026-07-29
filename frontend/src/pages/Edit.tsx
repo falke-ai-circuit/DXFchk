@@ -271,6 +271,7 @@ export default function Edit() {
                     entities={renderData.entities}
                     boundingBox={renderData.bounding_box}
                     layers={renderData.layers}
+                    layerColors={renderData.layer_colors || {}}
                   />
                 ) : (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>

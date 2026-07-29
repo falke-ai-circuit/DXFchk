@@ -23,9 +23,26 @@ type Entity struct {
 	Attribs []Entity
 }
 
+// LayerDef represents a layer definition from the TABLES section
+type LayerDef struct {
+	Name  string
+	Color int    // ACI color index (code 62)
+	Flags int    // Layer flags (code 70)
+}
+
+// BlockDef represents a block definition from the BLOCKS section
+type BlockDef struct {
+	Name     string
+	BaseX    float64
+	BaseY    float64
+	Entities []Entity
+}
+
 // Drawing represents a parsed DXF file
 type Drawing struct {
 	Entities []Entity
+	Layers   map[string]*LayerDef
+	Blocks   map[string]*BlockDef
 }
 
 // ReadFile reads a DXF file from disk
@@ -66,11 +83,17 @@ func ReadFromReader(r io.Reader) (*Drawing, error) {
 
 // parsePairs converts raw code pairs into structured entities
 func parsePairs(pairs []CodePair) *Drawing {
-	d := &Drawing{}
+	d := &Drawing{
+		Layers: make(map[string]*LayerDef),
+		Blocks: make(map[string]*BlockDef),
+	}
 	var currentEntity *Entity
 	var currentInsert *Entity    // track INSERT for ATTRIB collection
 	var currentPolyline *Entity  // track POLYLINE for VERTEX collection
+	var currentBlock *BlockDef   // track block being defined
 	inEntities := false
+	inBlocks := false
+	inLayerTable := false
 
 	for i := 0; i < len(pairs); i++ {
 		p := pairs[i]
@@ -78,20 +101,128 @@ func parsePairs(pairs []CodePair) *Drawing {
 		// Track sections
 		if p.Code == 0 && p.Value == "SECTION" {
 			if i+1 < len(pairs) && pairs[i+1].Code == 2 {
-				if strings.TrimSpace(pairs[i+1].Value) == "ENTITIES" {
-					inEntities = true
-				}
+				sectionName := strings.TrimSpace(pairs[i+1].Value)
+				inEntities = sectionName == "ENTITIES"
+				inBlocks = sectionName == "BLOCKS"
+				inLayerTable = false
 			}
 			continue
 		}
 		if p.Code == 0 && p.Value == "ENDSEC" {
 			inEntities = false
+			inBlocks = false
+			inLayerTable = false
+			currentBlock = nil
 			continue
 		}
 		if p.Code == 0 && p.Value == "EOF" {
 			break
 		}
 
+		// Parse TABLES section — extract LAYER definitions
+		if !inEntities && !inBlocks {
+			// Look for LAYER table entries
+			if p.Code == 0 && p.Value == "TABLE" {
+				if i+1 < len(pairs) && pairs[i+1].Code == 2 && strings.TrimSpace(pairs[i+1].Value) == "LAYER" {
+					inLayerTable = true
+				}
+				continue
+			}
+			if p.Code == 0 && p.Value == "ENDTAB" {
+				inLayerTable = false
+				continue
+			}
+			if inLayerTable && p.Code == 0 && p.Value == "LAYER" {
+				// Parse this layer definition
+				layer := &LayerDef{Color: 7} // default white
+				layerPairs := collectEntityPairs(pairs, &i)
+				for _, lp := range layerPairs {
+					switch lp.Code {
+					case 2:
+						layer.Name = strings.TrimSpace(lp.Value)
+					case 62:
+						c, _ := strconv.Atoi(strings.TrimSpace(lp.Value))
+						layer.Color = c
+					case 70:
+						f, _ := strconv.Atoi(strings.TrimSpace(lp.Value))
+						layer.Flags = f
+					}
+				}
+				if layer.Name != "" {
+					d.Layers[strings.ToUpper(layer.Name)] = layer
+				}
+				i-- // adjust for loop increment
+				continue
+			}
+			continue
+		}
+
+		// Parse BLOCKS section
+		if inBlocks {
+			if p.Code == 0 && p.Value == "BLOCK" {
+				// Start of a block definition
+				blockPairs := collectEntityPairs(pairs, &i)
+				block := &BlockDef{}
+				for _, bp := range blockPairs {
+					switch bp.Code {
+					case 2:
+						block.Name = strings.TrimSpace(bp.Value)
+					case 10:
+						block.BaseX, _ = strconv.ParseFloat(strings.TrimSpace(bp.Value), 64)
+					case 20:
+						block.BaseY, _ = strconv.ParseFloat(strings.TrimSpace(bp.Value), 64)
+					}
+				}
+				currentBlock = block
+				i--
+				continue
+			}
+			if p.Code == 0 && p.Value == "ENDBLK" {
+				// End of block definition
+				collectEntityPairs(pairs, &i)
+				if currentBlock != nil && currentBlock.Name != "" {
+					d.Blocks[strings.ToUpper(currentBlock.Name)] = currentBlock
+				}
+				currentBlock = nil
+				i--
+				continue
+			}
+			// Entities inside a block definition
+			if currentBlock != nil && p.Code == 0 {
+				entityType := strings.TrimSpace(p.Value)
+				ent := Entity{Type: entityType}
+				ent.Pairs = collectEntityPairs(pairs, &i)
+				// Handle POLYLINE/VERTEX inside blocks
+				if entityType == "POLYLINE" {
+					// Collect VERTEX entities
+					j := i + 1
+					for j < len(pairs) {
+						if pairs[j].Code == 0 {
+							vt := strings.TrimSpace(pairs[j].Value)
+							if vt == "VERTEX" {
+								vp := collectEntityPairs(pairs, &j)
+								ent.Pairs = append(ent.Pairs, vp...)
+								j--
+							} else if vt == "SEQEND" {
+								collectEntityPairs(pairs, &j)
+								j--
+								break
+							} else {
+								break
+							}
+						}
+						j++
+					}
+					i = j // advance past collected vertices
+				}
+				currentBlock.Entities = append(currentBlock.Entities, ent)
+				i--
+				continue
+			}
+			continue
+		}
+
+		// ENTITIES section (existing logic)
 		if !inEntities {
 			continue
 		}
@@ -200,6 +331,19 @@ func (e *Entity) GetFloatValue(code int) float64 {
 		}
 	}
 	return 0.0
+}
+
+// GetIntValue gets an int code pair value, returns 0 if not found
+func (e *Entity) GetIntValue(code int) int {
+	for _, p := range e.Pairs {
+		if p.Code == code {
+			v, err := strconv.Atoi(strings.TrimSpace(p.Value))
+			if err == nil {
+				return v
+			}
+		}
+	}
+	return 0
 }
 
 // GetAttribValue returns the text value of an ATTRIB with the given tag

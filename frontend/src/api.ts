@@ -161,6 +161,18 @@ export interface DiffEntity {
   coords_2d: number[][];
   block_name: string;
   layer: string;
+  color: number;
+  rotation: number;
+  scale_x: number;
+  scale_y: number;
+  h_align: number;
+  v_align: number;
+  text_height: number;
+  bulges: number[];
+  closed: boolean;
+  block_entities?: DiffEntity[];
+  block_base_x?: number;
+  block_base_y?: number;
 }
 
 export interface DiffResponse {
@@ -188,6 +200,7 @@ export interface DXFRenderResponse {
   type_counts: Record<string, number>;
   layers: string[];
   layer_count: number;
+  layer_colors: Record<string, number>;
   path: string;
   name: string;
 }
