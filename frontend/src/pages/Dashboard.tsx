@@ -52,6 +52,8 @@ export default function Dashboard() {
   const [saved, setSaved] = useState(false);
   const [browserTarget, setBrowserTarget] = useState<'projectPath' | 'template' | 'search' | 'output' | null>(null);
   const [editBrowserTarget, setEditBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
+  const [copyStatus, setCopyStatus] = useState<any>(null);
+  const [copyPolling, setCopyPolling] = useState(false);
   const fileImportRef = useRef<HTMLInputElement>(null);
   const zipImportRef = useRef<HTMLInputElement>(null);
 
@@ -73,13 +75,39 @@ export default function Dashboard() {
     if (!searchFolder) { setError('Source unchecked folder is required'); return; }
     setCreating(true);
     try {
-      await createProject({ name, project_number: projectNumber, project_path: projectPath, template_folder: templateFolder, search_folder: searchFolder });
+      const resp = await createProject({ name, project_number: projectNumber, project_path: projectPath, template_folder: templateFolder, search_folder: searchFolder });
       setShowCreate(false);
       setName(''); setProjectNumber(''); setProjectPath(''); setTemplateFolder(''); setSearchFolder('');
+      // Start polling copy status
+      if (resp?.id) {
+        setCopyPolling(true);
+        setCopyStatus({ done: false, phase: 'scanning', total_files: 0, copied_files: 0, current_file: '', elapsed: '', eta: '' });
+        pollCopyStatus(resp.id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
     }
     setCreating(false);
+  };
+
+  const pollCopyStatus = (projectId: string) => {
+    const poll = async () => {
+      try {
+        const status = await api.getCopyStatus(projectId);
+        setCopyStatus(status);
+        if (!status.done) {
+          setTimeout(poll, 1000);
+        } else {
+          setCopyPolling(false);
+          await fetchProjects();
+          // Auto-dismiss "done" card after 5 seconds
+          setTimeout(() => setCopyStatus(null), 5000);
+        }
+      } catch {
+        setTimeout(poll, 2000);
+      }
+    };
+    poll();
   };
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
@@ -320,6 +348,44 @@ export default function Dashboard() {
               </button>
               <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Copy Progress Card */}
+      {copyPolling && copyStatus && !copyStatus.done && (
+        <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <Loader2 size={16} className="spin" color="var(--accent)" />
+            <span style={{ fontSize: '14px', fontWeight: 600 }}>
+              {copyStatus.phase === 'scanning' ? 'Scanning DXF files...' :
+               copyStatus.phase === 'copying_templates' ? 'Copying template files...' :
+               copyStatus.phase === 'copying_unchecked' ? 'Copying unchecked files...' :
+               'Setting up project...'}
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              {copyStatus.copied_files} / {copyStatus.total_files || '?'}
+              {copyStatus.total_files > 0 && ` (${(copyStatus.copied_files / copyStatus.total_files * 100).toFixed(1)}%)`}
+            </span>
+          </div>
+          {copyStatus.total_files > 0 && (
+            <div className="progress-track" style={{ marginBottom: '8px' }}>
+              <div className="progress-fill" style={{ width: `${(copyStatus.copied_files / copyStatus.total_files * 100).toFixed(1)}%` }} />
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            <span>Current: {copyStatus.current_file || '...'}</span>
+            <span>Elapsed: {copyStatus.elapsed || '00:00:00'} · ETA: {copyStatus.eta || '...'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Copy Done Card */}
+      {copyStatus?.done && copyStatus.phase === 'done' && (
+        <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--success)' }} onClick={() => setCopyStatus(null)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileCheck size={16} color="var(--success)" />
+            <span style={{ fontSize: '14px', fontWeight: 600 }}>Project ready — {copyStatus.copied_files} files copied in {copyStatus.elapsed}</span>
           </div>
         </div>
       )}

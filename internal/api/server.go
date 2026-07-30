@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/compare"
@@ -25,6 +26,10 @@ type Server struct {
 	jobs          *JobManager
 	session       *SessionState
 	stopChan      chan struct{}
+
+	// Project copy progress tracking (keyed by project ID)
+	copyStatuses  map[string]*CopyStatus
+	copyMu        sync.Mutex
 }
 
 // Settings holds the application settings
@@ -67,7 +72,8 @@ func NewServer() *Server {
 			GroupByContent: true,
 			Recursive:      true,
 		},
-		jobs: NewJobManager(),
+		jobs:         NewJobManager(),
+		copyStatuses: make(map[string]*CopyStatus),
 	}
 
 	// Create sub-filesystem for frontend (strips the frontend_dist/ prefix)
@@ -121,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/project/zip-export", s.handleProjectZipExport)
 	s.mux.HandleFunc("POST /api/v1/project/zip-import", s.handleProjectZipImport)
 	s.mux.HandleFunc("POST /api/v1/open", s.handleOpenExternal) // open DXF in external editor
+	s.mux.HandleFunc("GET /api/v1/project/copy-status", s.handleCopyStatus) // project copy progress
 }
 
 // ServeHTTP implements http.Handler

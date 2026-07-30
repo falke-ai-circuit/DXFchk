@@ -401,4 +401,8 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: filePath, editor_path: editorPath }),
     }),
+
+  // Project copy status
+  getCopyStatus: (projectId: string) =>
+    apiFetch<{ done: boolean; phase: string; total_files: number; copied_files: number; failed_files: number; current_file: string; elapsed: string; eta: string; error: string }>(`/api/v1/project/copy-status?project_id=${encodeURIComponent(projectId)}`),
 };

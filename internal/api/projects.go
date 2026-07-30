@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -141,7 +142,8 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		// Folder names come from settings (configurable), defaults: templates, unchecked, output
 		folderTemplates, folderUnchecked, folderOutput := s.getFolderNames()
 
-		projectFolderName := fmt.Sprintf("%s_%s", req.ProjectNumber, slugify(req.Name))
+		// Use raw project number and name for folder name (preserve case, underscores)
+		projectFolderName := fmt.Sprintf("%s_%s", req.ProjectNumber, req.Name)
 		projectDir := filepath.Join(req.ProjectPath, projectFolderName)
 		templateDir := filepath.Join(projectDir, folderTemplates)
 		uncheckedDir := filepath.Join(projectDir, folderUnchecked)
@@ -155,23 +157,8 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Copy DXF files from source template folder to project templates/
-		tplCount, err := copyDXFFolder(req.TemplateFolder, templateDir)
-		if err != nil {
-			ErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to copy template files: %v", err))
-			return
-		}
-
-		// Copy DXF files from source search folder to project unchecked/
-		srchCount, err := copyDXFFolder(req.SearchFolder, uncheckedDir)
-		if err != nil {
-			ErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to copy search files: %v", err))
-			return
-		}
-
-		// Generate ID from project number (slug-like)
+		// Generate ID from project number (slug-like, lowercase for internal ID)
 		id := slugify(req.ProjectNumber)
-		// Ensure unique
 		if _, exists := store.Projects[id]; exists {
 			id = id + "_" + time.Now().Format("150405")
 		}
@@ -201,6 +188,10 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			MoveFiles:       false,
 		}
 
+		// Start async copy with progress tracking
+		copyStatus := s.startProjectCopy(id, req.TemplateFolder, templateDir, req.SearchFolder, uncheckedDir)
+
+		// Register project immediately (copy happens in background)
 		store.Projects[id] = project
 		store.ActiveID = id
 		s.settings.ActiveProjectID = id
@@ -210,8 +201,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			"ok":             true,
 			"project":        project,
 			"project_folder": projectDir,
-			"templates_copied": tplCount,
-			"files_copied":     srchCount,
+			"copy_status":    copyStatus,
 		})
 
 	default:
@@ -386,6 +376,167 @@ func copyDXFFolder(src, dst string) (int, error) {
 		return nil
 	})
 	return count, err
+}
+
+// CopyStatus tracks progress of async project file copying
+type CopyStatus struct {
+	ProjectID    string `json:"project_id"`
+	Phase        string `json:"phase"`        // "scanning", "copying_templates", "copying_unchecked", "done", "error"
+	TotalFiles   int    `json:"total_files"`
+	CopiedFiles  int    `json:"copied_files"`
+	FailedFiles  int    `json:"failed_files"`
+	CurrentFile  string `json:"current_file"`
+	Elapsed      string `json:"elapsed"`
+	ETA          string `json:"eta"`
+	Done         bool   `json:"done"`
+	Error        string `json:"error"`
+	startTime     time.Time
+}
+
+// startProjectCopy starts async parallel copying of DXF files with progress tracking
+func (s *Server) startProjectCopy(projectID, tplSrc, tplDst, srchSrc, srchDst string) *CopyStatus {
+	cs := &CopyStatus{
+		ProjectID: projectID,
+		Phase:     "scanning",
+		startTime: time.Now(),
+	}
+
+	s.copyMu.Lock()
+	s.copyStatuses[projectID] = cs
+	s.copyMu.Unlock()
+
+	go func() {
+		// Scan both source folders for DXF files
+		tplFiles := listDXFFiles(tplSrc)
+		srchFiles := listDXFFiles(srchSrc)
+		totalFiles := len(tplFiles) + len(srchFiles)
+
+		cs.TotalFiles = totalFiles
+		cs.Phase = "copying_templates"
+
+		start := time.Now()
+
+		// Shared counter across both phases
+		var counter int64
+
+		// Copy templates with parallel pool
+		copyResults := make(chan int, len(tplFiles))
+		copyPoolShared(tplFiles, tplSrc, tplDst, 8, copyResults, cs, &counter)
+		close(copyResults)
+		for range copyResults {}
+
+		// Copy unchecked files with parallel pool (counter continues)
+		cs.Phase = "copying_unchecked"
+		copyResults2 := make(chan int, len(srchFiles))
+		copyPoolShared(srchFiles, srchSrc, srchDst, 8, copyResults2, cs, &counter)
+		close(copyResults2)
+		for range copyResults2 {}
+
+		cs.Phase = "done"
+		cs.Done = true
+		cs.CurrentFile = ""
+		elapsed := time.Since(start)
+		cs.Elapsed = formatDuration(elapsed)
+		cs.ETA = "00:00:00"
+	}()
+
+	return cs
+}
+
+// listDXFFiles returns all .dxf file paths under src (recursive)
+func listDXFFiles(src string) []string {
+	var files []string
+	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(info.Name()), ".dxf") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files
+}
+
+// copyPoolShared copies files in parallel using a worker pool with a shared counter
+func copyPoolShared(files []string, srcBase, dstBase string, workers int, results chan<- int, cs *CopyStatus, counter *int64) {
+	jobs := make(chan string, len(files))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for filePath := range jobs {
+				relPath, err := filepath.Rel(srcBase, filePath)
+				if err != nil {
+					results <- 0
+					continue
+				}
+				targetPath := filepath.Join(dstBase, relPath)
+				targetDir := filepath.Dir(targetPath)
+				os.MkdirAll(targetDir, 0755)
+
+				// Fast copy: read all then write all
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					mu.Lock()
+					cs.FailedFiles++
+					mu.Unlock()
+					results <- 0
+					continue
+				}
+				if err := os.WriteFile(targetPath, data, 0644); err != nil {
+					mu.Lock()
+					cs.FailedFiles++
+					mu.Unlock()
+					results <- 0
+					continue
+				}
+
+				mu.Lock()
+				*counter++
+				cs.CopiedFiles = int(*counter)
+				cs.CurrentFile = filepath.Base(filePath)
+				elapsed := time.Since(cs.startTime)
+				cs.Elapsed = formatDuration(elapsed)
+				if cs.CopiedFiles > 0 && cs.TotalFiles > 0 {
+					perFile := elapsed / time.Duration(cs.CopiedFiles)
+					remaining := cs.TotalFiles - cs.CopiedFiles
+					cs.ETA = formatDuration(perFile * time.Duration(remaining))
+				}
+				mu.Unlock()
+				results <- 1
+			}
+		}()
+	}
+
+	for _, f := range files {
+		jobs <- f
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+// handleCopyStatus returns the copy progress for a project
+func (s *Server) handleCopyStatus(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("project_id")
+	if projectID == "" {
+		JSONResponse(w, http.StatusOK, map[string]any{"done": true, "phase": "no_project"})
+		return
+	}
+
+	s.copyMu.Lock()
+	cs, exists := s.copyStatuses[projectID]
+	s.copyMu.Unlock()
+
+	if !exists {
+		JSONResponse(w, http.StatusOK, map[string]any{"done": true, "phase": "no_copy"})
+		return
+	}
+
+	JSONResponse(w, http.StatusOK, cs)
 }
 
 // slugify converts a name to a URL-safe ID
