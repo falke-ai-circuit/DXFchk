@@ -256,7 +256,7 @@ export default function DXFViewer({
     const baseline = VALIGN_MAP[att.v_align] || 'alphabetic';
     const rot = att.rotation || 0;
     // Minimum font size in screen pixels — text must be readable
-    const screenFontSize = att.height * zoom;
+    // att.height * zoom — unused, removed for TS strict
     const minScreenSize = 7; // 7px minimum readable
     const actualFontSize = Math.max(att.height, minScreenSize / zoom);
     return (

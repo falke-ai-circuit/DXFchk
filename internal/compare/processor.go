@@ -130,7 +130,8 @@ func (c *ComparisonProcessor) ProcessFile(dxfFile string) (result Result) {
 		templateName = bestMatch
 	}
 
-	if templateName == "" || templateName == "notemplate" {
+	// Python: if not template_name or template_name not in self.template_map:
+	if templateName == "" {
 		c.handleNoTemplate(dxfFile)
 		return Result{FileName: fileName, Template: "notemplate", Status: "no_template"}
 	}
@@ -182,38 +183,33 @@ func (c *ComparisonProcessor) filesAreIdentical(file1, file2 string) bool {
 // handleNoTemplate copies file to output/notemplate/
 func (c *ComparisonProcessor) handleNoTemplate(dxfFile string) {
 	fileName := filepath.Base(dxfFile)
+	// Python: self._log(f"Processing: {filename}")  ← duplicate of the one in process_file
+	c.log(fmt.Sprintf("Processing: %s", fileName))
 	c.log(fmt.Sprintf("  -> No template found for %s", fileName))
 
 	notemplateDir := filepath.Join(c.OutputFolder, "notemplate")
 	os.MkdirAll(notemplateDir, 0755)
 	dst := filepath.Join(notemplateDir, fileName)
-	copyFile(dxfFile, dst, c.log)
+	// Python: copy_file(dxf_file, target_path) — log_callback is None during process_file
+	copyFileSilent(dxfFile, dst)
 }
 
 // handleMatchingFile copies file to output/template_name/
 func (c *ComparisonProcessor) handleMatchingFile(dxfFile, templateName string) {
 	fileName := filepath.Base(dxfFile)
+	// Python: self._log(f"Processing: {filename}")
+	c.log(fmt.Sprintf("Processing: %s", fileName))
+	// Python: self._log(f"  -> Using template: {template_name}")
 	c.log(fmt.Sprintf("  -> Using template: %s", templateName))
-
-	// Get entity counts for detailed log
-	content, err := extractContent(dxfFile)
-	if err == nil {
-		blocksCount := 0
-		for _, v := range content.Blocks { blocksCount += len(v) }
-		linesCount := 0
-		for _, v := range content.Lines { linesCount += len(v) }
-		polyCount := 0
-		for _, v := range content.Polylines { polyCount += len(v) }
-		c.log(fmt.Sprintf("  -> MATCH: %s is identical to template (%d blocks, %d lines, %d polylines)", fileName, blocksCount, linesCount, polyCount))
-	} else {
-		c.log(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
-	}
+	// Python: self._log(f"  -> MATCH: {filename} is identical to template")
+	c.log(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
 
 	safeName := sanitizeFilename(templateName)
 	dir := filepath.Join(c.OutputFolder, safeName)
 	os.MkdirAll(dir, 0755)
 	dst := filepath.Join(dir, fileName)
-	copyFile(dxfFile, dst, c.log)
+	// Python: copy_file(dxf_file, target_path) — log_callback is None during process_file
+	copyFileSilent(dxfFile, dst)
 
 	c.templateDirectCopies[safeName] = append(c.templateDirectCopies[safeName], fileName)
 }
@@ -427,18 +423,22 @@ func (c *ComparisonProcessor) handleDifferentFile(dxfFile, templatePath, templat
 	os.MkdirAll(templateDir, 0755)
 	tempTargetPath := filepath.Join(templateDir, fileName)
 	// Push diff summary to live log (matches Python lines 373-374)
-	if len(onlyIn1B) > 0 || len(onlyIn2B) > 0 || len(diffB) > 0 {
-		c.log(fmt.Sprintf("  -> Found differences in blocks: %d block type(s) with differences", len(onlyIn1B)+len(onlyIn2B)+len(diffB)))
+	// Python: diff_msg = f"  -> Found differences in {key}: {len(result['diff'])} layer(s) with differences"
+	if len(diffB) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in blocks: %d layer(s) with differences", len(diffB)))
 	}
-	if len(onlyIn1L) > 0 || len(onlyIn2L) > 0 || len(diffL) > 0 {
-		c.log(fmt.Sprintf("  -> Found differences in lines: %d layer(s) with differences", len(onlyIn1L)+len(onlyIn2L)+len(diffL)))
+	if len(diffL) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in lines: %d layer(s) with differences", len(diffL)))
 	}
-	if len(onlyIn1P) > 0 || len(onlyIn2P) > 0 || len(diffP) > 0 {
-		c.log(fmt.Sprintf("  -> Found differences in polylines: %d layer(s) with differences", len(onlyIn1P)+len(onlyIn2P)+len(diffP)))
+	if len(diffP) > 0 {
+		c.log(fmt.Sprintf("  -> Found differences in polylines: %d layer(s) with differences", len(diffP)))
 	}
 
+	// Python: self._log(f"  -> DIFFERENT: {filename} has differences from template")
 	c.log(fmt.Sprintf("  -> DIFFERENT: %s has differences from template", fileName))
-	copyFile(dxfFile, tempTargetPath, c.log)
+
+	// Python: copy_file(dxf_path, temp_target_path) — no log from copy_file in Python
+	copyFileSilent(dxfFile, tempTargetPath)
 
 	var contentHash string
 	if c.GroupByContent {
@@ -482,7 +482,7 @@ func (c *ComparisonProcessor) Finalize() {
 		safeName := sanitizeFilename(templateName)
 		c.log(fmt.Sprintf("Processing template: %s with %d different content groups", templateName, len(hashFiles)))
 
-		// Sort hashes for deterministic ordering
+		// Sort hashes for deterministic ordering (Python: sorted(hash_files.items(), key=lambda x: x[0]))
 		hashes := make([]string, 0, len(hashFiles))
 		for h := range hashFiles {
 			if len(hashFiles[h]) > 0 {
@@ -495,8 +495,8 @@ func (c *ComparisonProcessor) Finalize() {
 			files := hashFiles[hash]
 			// Python: mod_folder_name = f"{sanitized_template_name}_mod{mod_idx}"
 			modFolderName := fmt.Sprintf("%s_mod%d", safeName, i+1)
-			// Nest _modN under the template name folder: Output/BI001/BI001_mod1/
-			modDir := filepath.Join(c.OutputFolder, safeName, modFolderName)
+			// Python: mod_folder_path = os.path.join(output_folder, mod_folder_name) — FLAT, not nested
+			modDir := filepath.Join(c.OutputFolder, modFolderName)
 			os.MkdirAll(modDir, 0755)
 
 			c.log(fmt.Sprintf("  -> Using mod folder: %s with %d files", modFolderName, len(files)))
@@ -506,8 +506,9 @@ func (c *ComparisonProcessor) Finalize() {
 					continue
 				}
 				targetPath := filepath.Join(modDir, fi.FileName)
-				// Python uses move_file (copy + delete original)
-				moveFile(fi.FilePath, targetPath, c.log)
+				// Python: move_file(file_info["file_path"], target_path) — no "Moved to:" log
+				moveFileSilent(fi.FilePath, targetPath)
+				// Python: self._log(f"    -> Moved {file_info['file_name']} from template folder to {mod_folder_name}")
 				c.log(fmt.Sprintf("    -> Moved %s from template folder to %s", fi.FileName, modFolderName))
 			}
 			c.modFolders[modDir] = true
@@ -518,6 +519,20 @@ func (c *ComparisonProcessor) Finalize() {
 	c.ensureAllFoldersHaveLogs()
 
 	c.log(fmt.Sprintf("Created %d mod folders in total", len(c.modFolders)))
+
+	// Python: empty_hash_groups = sum(1 for template_name, hash_files in self.template_file_hashes.items()
+	//                                  for hash_val, files in hash_files.items() if not files)
+	emptyHashGroups := 0
+	for _, hashFiles := range c.templateFileHashes {
+		for _, files := range hashFiles {
+			if len(files) == 0 {
+				emptyHashGroups++
+			}
+		}
+	}
+	if emptyHashGroups > 0 {
+		c.log(fmt.Sprintf("Note: %d empty hash groups were skipped", emptyHashGroups))
+	}
 }
 
 // GetModFolderCount returns the number of created mod folders
@@ -581,8 +596,15 @@ func RunComparison(templateMap TemplateMap, searchFolder, outputFolder string, r
 			noTemplate++
 		}
 	}
-	logFn(fmt.Sprintf("Processing complete. Processed %d of %d files.", matched+different+noTemplate, len(dxfFiles)))
-	logFn(fmt.Sprintf("=== SUMMARY: %d matched, %d different, %d no template ===", matched, different, noTemplate))
+	// Python: processed_count = results["matched_files"] + results["different_files"] + results["no_template_files"]
+	processedCount := matched + different + noTemplate
+	logFn(fmt.Sprintf("Processing complete. Processed %d of %d files.", processedCount, len(dxfFiles)))
+
+	// Python: if processed_count < len(dxf_files):
+	//             log_callback(f"Warning: {len(dxf_files) - processed_count} files may have been skipped due to errors.")
+	if processedCount < len(dxfFiles) {
+		logFn(fmt.Sprintf("Warning: %d files may have been skipped due to errors.", len(dxfFiles)-processedCount))
+	}
 
 	return results
 }
@@ -830,10 +852,10 @@ func (c *ComparisonProcessor) saveDetailedLogs() {
 			if len(files) == 0 {
 				continue
 			}
+			// Python: mod_folder_name = f"{sanitized_template_name}_mod{mod_idx}" — flat name
 			modFolderName := fmt.Sprintf("%s_mod%d", safeName, modIdx+1)
-			nestedPath := filepath.Join(safeName, modFolderName)
 			for _, fi := range files {
-				fileDestinations[fi.FileName] = nestedPath
+				fileDestinations[fi.FileName] = modFolderName
 			}
 		}
 	}
@@ -1183,6 +1205,15 @@ func copyFile(src, dst string, log func(string)) {
 	log(fmt.Sprintf("Copied to: %s", dst))
 }
 
+// copyFileSilent copies without logging (matches Python copy_file with log_callback=None)
+func copyFileSilent(src, dst string) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return
+	}
+	os.WriteFile(dst, data, 0644)
+}
+
 func moveFile(src, dst string, log func(string)) {
 	err := os.Rename(src, dst)
 	if err != nil {
@@ -1191,5 +1222,15 @@ func moveFile(src, dst string, log func(string)) {
 		os.Remove(src)
 	}
 	log(fmt.Sprintf("Moved to: %s", dst))
+}
+
+// moveFileSilent moves without logging (matches Python move_file with log_callback=None)
+func moveFileSilent(src, dst string) {
+	err := os.Rename(src, dst)
+	if err != nil {
+		// Fallback: copy + remove
+		copyFileSilent(src, dst)
+		os.Remove(src)
+	}
 }
 

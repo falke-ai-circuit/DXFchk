@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import {
   FolderOpen, Plus, Trash2, Folder, FileSearch, Files,
   FileCheck, FileDiff, FileQuestion, Activity, Loader2, FolderCog,
-  Download, Upload, Save, Package, ArrowRight, ChevronDown
+  Download, Upload, Save, Package, ChevronDown
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type Project } from '../api';

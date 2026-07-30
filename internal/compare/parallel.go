@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falke-ai-circuit/DXFchk/internal/dxf"
 )
@@ -29,7 +31,7 @@ func RunComparisonParallel(templateMap TemplateMap, searchFolder, outputFolder s
 
 	logFn("Note: Original files in search folder will be preserved")
 	logFn("Note: Files with differences will be moved from template folders to mod folders to avoid duplicates")
-	logFn(fmt.Sprintf("Note: Using %d parallel workers", workers))
+	logFn("Note: Detailed comparison logs will be saved for each template")
 
 	// Find all DXF files
 	var dxfFiles []string
@@ -135,8 +137,15 @@ func RunComparisonParallel(templateMap TemplateMap, searchFolder, outputFolder s
 			noTemplate++
 		}
 	}
-	logFn(fmt.Sprintf("Processing complete. Processed %d of %d files.", matched+different+noTemplate, total))
-	logFn(fmt.Sprintf("=== SUMMARY: %d matched, %d different, %d no template ===", matched, different, noTemplate))
+	// Python: processed_count = results["matched_files"] + results["different_files"] + results["no_template_files"]
+	processedCount := matched + different + noTemplate
+	logFn(fmt.Sprintf("Processing complete. Processed %d of %d files.", processedCount, total))
+
+	// Python: if processed_count < len(dxf_files):
+	//             log_callback(f"Warning: {len(dxf_files) - processed_count} files may have been skipped due to errors.")
+	if processedCount < total {
+		logFn(fmt.Sprintf("Warning: %d files may have been skipped due to errors.", total-processedCount))
+	}
 
 	return results
 }
@@ -161,13 +170,17 @@ func processFileParallel(dxfFile string, templateMap TemplateMap, groupByContent
 	// Extract template name
 	templateName := getTemplateName(drawing, fileName, templateMap)
 
-	if templateName == "" || templateName == "notemplate" {
+	if templateName == "" {
+		// Python: self._log(f"Processing: {filename}")  ← duplicate
+		logFn(fmt.Sprintf("Processing: %s", fileName))
 		logFn(fmt.Sprintf("  -> No template found for %s", fileName))
 		return fileDecision{FileName: fileName, FilePath: dxfFile, Status: "no_template", TemplateName: "notemplate"}
 	}
 
 	templatePath, found := templateMap[templateName]
 	if !found {
+		// Python: self._log(f"Processing: {filename}")  ← duplicate
+		logFn(fmt.Sprintf("Processing: %s", fileName))
 		logFn(fmt.Sprintf("  -> No template found for %s", fileName))
 		return fileDecision{FileName: fileName, FilePath: dxfFile, Status: "no_template", TemplateName: "notemplate"}
 	}
@@ -175,34 +188,49 @@ func processFileParallel(dxfFile string, templateMap TemplateMap, groupByContent
 	// Compare
 	identical, content1, _ := compareFilesParallel(dxfFile, templatePath, logFn)
 	if identical {
-		// Get entity counts for detailed log
-		if content1 != nil {
-			blocksCount := 0
-			for _, v := range content1.Blocks { blocksCount += len(v) }
-			linesCount := 0
-			for _, v := range content1.Lines { linesCount += len(v) }
-			polyCount := 0
-			for _, v := range content1.Polylines { polyCount += len(v) }
-			logFn(fmt.Sprintf("  -> Using template: %s", templateName))
-			logFn(fmt.Sprintf("  -> MATCH: %s is identical to template (%d blocks, %d lines, %d polylines)", fileName, blocksCount, linesCount, polyCount))
-		} else {
-			logFn(fmt.Sprintf("  -> Using template: %s", templateName))
-			logFn(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
-		}
+		// Python: self._log(f"Processing: {filename}")
+		logFn(fmt.Sprintf("Processing: %s", fileName))
+		// Python: self._log(f"  -> Using template: {template_name}")
+		logFn(fmt.Sprintf("  -> Using template: %s", templateName))
+		// Python: self._log(f"  -> MATCH: {filename} is identical to template")
+		logFn(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
 		return fileDecision{FileName: fileName, FilePath: dxfFile, Status: "match", TemplateName: templateName}
 	}
 
-	// Different — compute hash and build detailed log
+	// Different — compute hash
 	contentHash := ""
 	if groupByContent && content1 != nil {
 		contentHash = ContentHash(content1)
-		logFn(fmt.Sprintf("  -> Grouped with content hash: %s", contentHash[:8]))
 	}
 
-	// Build detailed log
+	// Build detailed log (full version matching Python _compare_with_template)
 	detailedLog := buildDetailedLog(fileName, dxfFile, templateName, templatePath, content1)
 
+	// Python diff summary: f"  -> Found differences in {key}: {len(result['diff'])} layer(s) with differences"
+	if content1 != nil {
+		content2, _ := extractContent(templatePath)
+		if content2 != nil {
+			_, _, _, diffB := compareDictOfLists(content1.Blocks, content2.Blocks)
+			_, _, _, diffL := compareDictOfListsLines(content1.Lines, content2.Lines)
+			_, _, _, diffP := compareDictOfListsPolylines(content1.Polylines, content2.Polylines)
+			if len(diffB) > 0 {
+				logFn(fmt.Sprintf("  -> Found differences in blocks: %d layer(s) with differences", len(diffB)))
+			}
+			if len(diffL) > 0 {
+				logFn(fmt.Sprintf("  -> Found differences in lines: %d layer(s) with differences", len(diffL)))
+			}
+			if len(diffP) > 0 {
+				logFn(fmt.Sprintf("  -> Found differences in polylines: %d layer(s) with differences", len(diffP)))
+			}
+		}
+	}
+
+	// Python: self._log(f"  -> DIFFERENT: {filename} has differences from template")
 	logFn(fmt.Sprintf("  -> DIFFERENT: %s has differences from template", fileName))
+
+	if contentHash != "" {
+		logFn(fmt.Sprintf("  -> Grouped with content hash: %s", contentHash[:8]))
+	}
 
 	return fileDecision{
 		FileName:     fileName,
@@ -257,14 +285,182 @@ func compareFilesParallel(file1, file2 string, logFn func(string)) (bool, *dxf.D
 }
 
 // buildDetailedLog creates the detailed comparison log string
+// Full version matching Python _compare_with_template
 func buildDetailedLog(fileName, dxfFile, templateName, templatePath string, content1 *dxf.DXFContent) string {
+	content2, _ := extractContent(templatePath)
+	if content2 == nil {
+		// Error case
+		var log []string
+		log = append(log, "========== DETAILED COMPARISON LOG ==========")
+		log = append(log, fmt.Sprintf("File: %s", fileName))
+		log = append(log, fmt.Sprintf("Template: %s (%s)", templateName, filepath.Base(templatePath)))
+		log = append(log, fmt.Sprintf("Comparison Time: %s", time.Now().Format("2006-01-02 15:04:05")))
+		log = append(log, "==========================================\n")
+		log = append(log, fmt.Sprintf("  -> Error reading DXF data from %s or template", fileName))
+		log = append(log, "Processing failed - could not read DXF data")
+		return strings.Join(log, "\n")
+	}
+
 	var detailedLog []string
 	detailedLog = append(detailedLog, "========== DETAILED COMPARISON LOG ==========")
 	detailedLog = append(detailedLog, fmt.Sprintf("File: %s", fileName))
 	detailedLog = append(detailedLog, fmt.Sprintf("Template: %s (%s)", templateName, filepath.Base(templatePath)))
+	detailedLog = append(detailedLog, fmt.Sprintf("Comparison Time: %s", time.Now().Format("2006-01-02 15:04:05")))
+	detailedLog = append(detailedLog, "==========================================\n")
+
+	// Entity counts
+	blocksCount1 := 0
+	for _, v := range content1.Blocks { blocksCount1 += len(v) }
+	blocksCount2 := 0
+	for _, v := range content2.Blocks { blocksCount2 += len(v) }
+	linesCount1 := 0
+	for _, v := range content1.Lines { linesCount1 += len(v) }
+	linesCount2 := 0
+	for _, v := range content2.Lines { linesCount2 += len(v) }
+	polyCount1 := 0
+	for _, v := range content1.Polylines { polyCount1 += len(v) }
+	polyCount2 := 0
+	for _, v := range content2.Polylines { polyCount2 += len(v) }
+
+	detailedLog = append(detailedLog, "1. ENTITY COUNTS")
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Blocks: %d in %d block types", blocksCount1, len(content1.Blocks)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Blocks: %d in %d block types", blocksCount2, len(content2.Blocks)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Lines: %d in %d layers", linesCount1, len(content1.Lines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Lines: %d in %d layers", linesCount2, len(content2.Lines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  File Polylines: %d in %d layers", polyCount1, len(content1.Polylines)))
+	detailedLog = append(detailedLog, fmt.Sprintf("  Template Polylines: %d in %d layers", polyCount2, len(content2.Polylines)))
 	detailedLog = append(detailedLog, "")
-	detailedLog = append(detailedLog, "Result: DIFFERENT from template")
-	detailedLog = append(detailedLog, "==========================================")
+
+	// Compare
+	_, onlyIn1B, onlyIn2B, diffB := compareDictOfLists(content1.Blocks, content2.Blocks)
+	_, onlyIn1L, onlyIn2L, diffL := compareDictOfListsLines(content1.Lines, content2.Lines)
+	_, onlyIn1P, onlyIn2P, diffP := compareDictOfListsPolylines(content1.Polylines, content2.Polylines)
+
+	// Block differences
+	detailedLog = append(detailedLog, "2. BLOCK DIFFERENCES")
+	if len(onlyIn1B) > 0 {
+		detailedLog = append(detailedLog, "  Block types only in file:")
+		sort.Strings(onlyIn1B)
+		for _, name := range onlyIn1B {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d instances)", name, len(content1.Blocks[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No block types unique to file")
+	}
+	if len(onlyIn2B) > 0 {
+		detailedLog = append(detailedLog, "  Block types only in template:")
+		sort.Strings(onlyIn2B)
+		for _, name := range onlyIn2B {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d instances)", name, len(content2.Blocks[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No block types unique to template")
+	}
+	if len(diffB) > 0 {
+		detailedLog = append(detailedLog, "  Blocks with differences in common block types:")
+		diffBKeys := make([]string, 0, len(diffB))
+		for k := range diffB { diffBKeys = append(diffBKeys, k) }
+		sort.Strings(diffBKeys)
+		for _, name := range diffBKeys {
+			d := diffB[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d instances only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d instances only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common instances", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common block types")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Line differences
+	detailedLog = append(detailedLog, "3. LINE DIFFERENCES")
+	if len(onlyIn1L) > 0 {
+		detailedLog = append(detailedLog, "  Line layers only in file:")
+		sort.Strings(onlyIn1L)
+		for _, name := range onlyIn1L {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d lines)", name, len(content1.Lines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No line layers unique to file")
+	}
+	if len(onlyIn2L) > 0 {
+		detailedLog = append(detailedLog, "  Line layers only in template:")
+		sort.Strings(onlyIn2L)
+		for _, name := range onlyIn2L {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d lines)", name, len(content2.Lines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No line layers unique to template")
+	}
+	if len(diffL) > 0 {
+		detailedLog = append(detailedLog, "  Lines with differences in common layers:")
+		diffLKeys := make([]string, 0, len(diffL))
+		for k := range diffL { diffLKeys = append(diffLKeys, k) }
+		sort.Strings(diffLKeys)
+		for _, name := range diffLKeys {
+			d := diffL[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d lines only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d lines only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common lines", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common line layers")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Polyline differences
+	detailedLog = append(detailedLog, "4. POLYLINE DIFFERENCES")
+	if len(onlyIn1P) > 0 {
+		detailedLog = append(detailedLog, "  Polyline layers only in file:")
+		sort.Strings(onlyIn1P)
+		for _, name := range onlyIn1P {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d polylines)", name, len(content1.Polylines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No polyline layers unique to file")
+	}
+	if len(onlyIn2P) > 0 {
+		detailedLog = append(detailedLog, "  Polyline layers only in template:")
+		sort.Strings(onlyIn2P)
+		for _, name := range onlyIn2P {
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s (%d polylines)", name, len(content2.Polylines[name])))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No polyline layers unique to template")
+	}
+	if len(diffP) > 0 {
+		detailedLog = append(detailedLog, "  Polylines with differences in common layers:")
+		diffPKeys := make([]string, 0, len(diffP))
+		for k := range diffP { diffPKeys = append(diffPKeys, k) }
+		sort.Strings(diffPKeys)
+		for _, name := range diffPKeys {
+			d := diffP[name]
+			detailedLog = append(detailedLog, fmt.Sprintf("    - %s:", name))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d polylines only in file", len(d.OnlyIn1)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d polylines only in template", len(d.OnlyIn2)))
+			detailedLog = append(detailedLog, fmt.Sprintf("      * %d common polylines", len(d.Common)))
+		}
+	} else {
+		detailedLog = append(detailedLog, "  No differences in common polyline layers")
+	}
+	detailedLog = append(detailedLog, "")
+
+	// Summary
+	hasDiffs := len(onlyIn1B) > 0 || len(onlyIn2B) > 0 || len(diffB) > 0 ||
+		len(onlyIn1L) > 0 || len(onlyIn2L) > 0 || len(diffL) > 0 ||
+		len(onlyIn1P) > 0 || len(onlyIn2P) > 0 || len(diffP) > 0
+
+	detailedLog = append(detailedLog, "5. COMPARISON SUMMARY")
+	if hasDiffs {
+		detailedLog = append(detailedLog, fmt.Sprintf("  RESULT: DIFFERENT - '%s' has differences from template", fileName))
+		detailedLog = append(detailedLog, "  File will be copied to template folder and organized into mod folders")
+	} else {
+		detailedLog = append(detailedLog, fmt.Sprintf("  RESULT: MATCH - '%s' is identical to template", fileName))
+		detailedLog = append(detailedLog, "  File will be copied to the template folder")
+	}
+
 	return strings.Join(detailedLog, "\n")
 }
 
@@ -274,7 +470,8 @@ func (c *ComparisonProcessor) applyMatch(d fileDecision) {
 	dir := filepath.Join(c.OutputFolder, safeName)
 	os.MkdirAll(dir, 0755)
 	dst := filepath.Join(dir, d.FileName)
-	copyFile(d.FilePath, dst, c.log)
+	// Python: copy_file(dxf_file, target_path) — log_callback is None
+	copyFileSilent(d.FilePath, dst)
 	c.templateDirectCopies[safeName] = append(c.templateDirectCopies[safeName], d.FileName)
 }
 
@@ -283,7 +480,8 @@ func (c *ComparisonProcessor) applyNoTemplate(d fileDecision) {
 	notemplateDir := filepath.Join(c.OutputFolder, "notemplate")
 	os.MkdirAll(notemplateDir, 0755)
 	dst := filepath.Join(notemplateDir, d.FileName)
-	copyFile(d.FilePath, dst, c.log)
+	// Python: copy_file(dxf_file, target_path) — log_callback is None
+	copyFileSilent(d.FilePath, dst)
 }
 
 // applyDifferent handles a file that differs from template (sequential)
@@ -292,7 +490,8 @@ func (c *ComparisonProcessor) applyDifferent(d fileDecision) {
 	templateDir := filepath.Join(c.OutputFolder, safeName)
 	os.MkdirAll(templateDir, 0755)
 	tempTargetPath := filepath.Join(templateDir, d.FileName)
-	copyFile(d.FilePath, tempTargetPath, c.log)
+	// Python: copy_file(dxf_path, temp_target_path) — log_callback is None
+	copyFileSilent(d.FilePath, tempTargetPath)
 
 	if c.GroupByContent && d.ContentHash != "" {
 		if c.templateFileHashes[d.TemplateName] == nil {

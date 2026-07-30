@@ -191,9 +191,9 @@ func TestTemplateMatchingByFilenamePrefix(t *testing.T) {
 	}
 }
 
-// TestNestedModFolderCreation verifies that _modN folders are created nested
-// under the template name folder (not flat in the output root).
-// Expected structure: Output/BI001/BI001_mod1/file.dxf
+// TestNestedModFolderCreation verifies that _modN folders are created flat
+// in the output root (matching Python behavior).
+// Expected structure: Output/BI001_mod1/file.dxf
 func TestNestedModFolderCreation(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputFolder := filepath.Join(tmpDir, "output")
@@ -246,13 +246,13 @@ func TestNestedModFolderCreation(t *testing.T) {
 		t.Errorf("expected status 'different', got '%s'", results[0].Status)
 	}
 
-	// Verify nested _mod1 folder exists: Output/BI001/BI001_mod1/
-	modDir := filepath.Join(outputFolder, "BI001", "BI001_mod1")
+	// Verify flat _mod1 folder exists: Output/BI001_mod1/
+	modDir := filepath.Join(outputFolder, "BI001_mod1")
 	if _, err := os.Stat(modDir); os.IsNotExist(err) {
 		// Maybe it's just in the template folder if no mod grouping needed
 		templateDir2 := filepath.Join(outputFolder, "BI001")
 		entries, _ := os.ReadDir(templateDir2)
-		t.Errorf("nested _mod1 folder not found at %s. Template dir contents: %v", modDir, entries)
+		t.Errorf("flat _mod1 folder not found at %s. Template dir contents: %v", modDir, entries)
 	}
 
 	// Verify the DXF file is in the _mod1 folder
@@ -418,8 +418,8 @@ func TestFinalizeCreatesModFolders(t *testing.T) {
 	// Finalize should create _mod1 folder and move the file there
 	processor.Finalize()
 
-	// Check _mod1 folder was created
-	modDir := filepath.Join(outputFolder, "BI001", "BI001_mod1")
+	// Check _mod1 folder was created (flat, matching Python)
+	modDir := filepath.Join(outputFolder, "BI001_mod1")
 	if _, err := os.Stat(modDir); os.IsNotExist(err) {
 		t.Fatalf("expected _mod1 folder at %s", modDir)
 	}
