@@ -248,7 +248,7 @@ export default function Compare() {
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* LEFT SIDE — All controls, stats, ETA, actions */}
-      <div style={{ flex: '0 0 480px', flexShrink: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '16px', borderRight: '1px solid var(--border)' }}>
+      <div style={{ flex: '0 0 600px', flexShrink: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '16px', borderRight: '1px solid var(--border)' }}>
         <h1 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '12px' }}>Compare DXF Files</h1>
 
         {/* Active project indicator */}
