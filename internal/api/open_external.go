@@ -36,33 +36,29 @@ func (s *Server) handleOpenExternal(w http.ResponseWriter, r *http.Request) {
 		editorPath = s.settings.ExternalEditorPath
 	}
 
+	// Use cmd /c start with proper quoting to launch detached
+	// "start" launches the app in a new process and returns immediately
 	var cmd *exec.Cmd
 
 	if editorPath != "" {
-		// Use configured editor — pass file path as argument
-		cmd = exec.Command(editorPath, req.Path)
+		// Use configured editor with file as argument
+		// cmd /c start "" "editor.exe" "file.dxf"
+		cmd = exec.Command("cmd", "/c", "start", "", editorPath, req.Path)
 	} else {
-		// Use Windows ShellExecute via rundll32 — works from SYSTEM context
-		// This is more reliable than `start` when running as a service/SYSTEM
-		cmd = exec.Command("rundll32.exe", "shell32.dll,ShellExec_RunDLL", req.Path)
+		// Use Windows default file association
+		// cmd /c start "" "file.dxf"
+		cmd = exec.Command("cmd", "/c", "start", "", req.Path)
 	}
 
 	// Detach — don't wait for the editor to close
 	if err := cmd.Start(); err != nil {
-		// Fallback: try explorer.exe to open the file
-		cmd2 := exec.Command("explorer.exe", req.Path)
-		if err2 := cmd2.Start(); err2 != nil {
-			ErrorResponse(w, http.StatusInternalServerError, "failed to launch editor: "+err.Error()+"; fallback also failed: "+err2.Error())
-			return
-		}
-		if cmd2.Process != nil {
-			cmd2.Process.Release()
-		}
-		editorPath = "explorer"
-	} else {
-		if cmd.Process != nil {
-			cmd.Process.Release()
-		}
+		ErrorResponse(w, http.StatusInternalServerError, "failed to launch editor: "+err.Error())
+		return
+	}
+
+	// Release the process so it doesn't become a zombie
+	if cmd.Process != nil {
+		cmd.Process.Release()
 	}
 
 	// Use the filename as the editor display name if no editor was configured
