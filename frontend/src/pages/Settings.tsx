@@ -110,7 +110,7 @@ export default function Settings() {
           {healthResult && (
             <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 13 }}>
               {healthResult.ok ? (
-                <><CheckCircle size={16} color="var(--success)" /><span style={{ color: 'var(--success)' }}>Online · v{healthResult.version}</span></>
+                <><CheckCircle size={16} color="var(--success)" /><span style={{ color: 'var(--success)' }}>Online · {healthResult.version}</span></>
               ) : (
                 <><XCircle size={16} color="var(--error)" /><span style={{ color: 'var(--error)' }}>Offline</span></>
               )}
@@ -119,7 +119,7 @@ export default function Settings() {
           {health && !healthResult && (
             <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 13, color: 'var(--text-muted)' }}>
               {health.status === 'ok' ? <CheckCircle size={16} color="var(--success)" /> : <XCircle size={16} color="var(--error)" />}
-              {health.status === 'ok' ? `Online · v${health.version}` : 'Offline'}
+              {health.status === 'ok' ? `Online · ${health.version}` : 'Offline'}
             </span>
           )}
         </div>

@@ -183,7 +183,7 @@ export default function Dashboard() {
         <h1 style={{ fontSize: '24px', fontWeight: 700 }}>DXFchk Dashboard</h1>
         {health && (
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
-            {health.status === 'ok' ? '🟢' : '🔴'} v{health.version} {health.running ? '· running' : ''}
+            {health.status === 'ok' ? '🟢' : '🔴'} {health.version} {health.running ? '· running' : ''}
           </span>
         )}
       </div>

@@ -213,6 +213,7 @@ function GlobalStatusBar() {
 
 function HealthIndicator() {
   const [status, setStatus] = React.useState<'ok' | 'err' | 'loading'>('loading');
+  const [version, setVersion] = React.useState('');
 
   React.useEffect(() => {
     let mounted = true;
@@ -221,7 +222,10 @@ function HealthIndicator() {
         const res = await fetch('/api/v1/health');
         if (res.ok) {
           const data = await res.json();
-          if (mounted) setStatus(data.status === 'ok' ? 'ok' : 'err');
+          if (mounted) {
+            setStatus(data.status === 'ok' ? 'ok' : 'err');
+            setVersion(data.version || '');
+          }
         } else {
           if (mounted) setStatus('err');
         }
@@ -254,6 +258,7 @@ function HealthIndicator() {
         }}
       />
       {status === 'ok' ? 'Online' : status === 'err' ? 'Offline' : '...'}
+      {version && <span style={{ opacity: 0.6 }}>· {version}</span>}
     </span>
   );
 }
