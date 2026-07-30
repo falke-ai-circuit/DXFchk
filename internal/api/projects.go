@@ -292,6 +292,11 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodDelete:
+		// Delete project folder structure if it exists
+		if project.ProjectPath != "" {
+			os.RemoveAll(project.ProjectPath)
+		}
+
 		delete(store.Projects, projectID)
 		if store.ActiveID == projectID {
 			store.ActiveID = ""
