@@ -144,6 +144,31 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Project Folder Names */}
+      <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Layers size={16} color="var(--accent)" />
+          Project Subfolder Names
+        </h2>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: '16px' }}>
+          Names used when creating project folders. Defaults: templates, unchecked, output.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+          <div>
+            <label style={labelStyle}>Templates Folder</label>
+            <input type="text" value={form.folder_templates || ''} onChange={(e) => setForm({ ...form, folder_templates: e.target.value })} placeholder="templates" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Unchecked Folder</label>
+            <input type="text" value={form.folder_unchecked || ''} onChange={(e) => setForm({ ...form, folder_unchecked: e.target.value })} placeholder="unchecked" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Output Folder</label>
+            <input type="text" value={form.folder_output || ''} onChange={(e) => setForm({ ...form, folder_output: e.target.value })} placeholder="output" style={inputStyle} />
+          </div>
+        </div>
+      </div>
+
       {/* Default Options */}
       <div className="card" style={{ marginBottom: '16px' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Comparison Options</h2>

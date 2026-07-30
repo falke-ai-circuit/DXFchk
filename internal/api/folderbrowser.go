@@ -291,15 +291,81 @@ func (s *Server) handleProjectZipImport(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Update project paths to point to extracted locations
-	// Standardized structure: {extractBase}/{topLevelFolder}/{templates|unchecked|output}/
+	// Standardized structure: {extractBase}/{topLevelFolder}/{custom_subfolders}/
+	// Detect which subfolders exist (they may have custom names from settings)
 	if topLevelFolder != "" {
 		extractedProjectDir := filepath.Join(extractBase, topLevelFolder)
 		project.ProjectPath = extractedProjectDir
-		project.TemplateFolder = filepath.Join(extractedProjectDir, "templates")
-		project.SearchFolder = filepath.Join(extractedProjectDir, "unchecked")
-		project.OutputFolder = filepath.Join(extractedProjectDir, "output")
-		// Ensure output dir exists
-		os.MkdirAll(project.OutputFolder, 0755)
+
+		// List subfolders in the extracted project dir
+		entries, _ := os.ReadDir(extractedProjectDir)
+		var subfolders []string
+		for _, e := range entries {
+			if e.IsDir() {
+				subfolders = append(subfolders, e.Name())
+			}
+		}
+
+		// Try to match known folder roles by checking settings or using defaults
+		folderTemplates, folderUnchecked, folderOutput := s.getFolderNames()
+
+		// Check if custom-named folders exist
+		foundTemplates := false
+		foundUnchecked := false
+		foundOutput := false
+		for _, sf := range subfolders {
+			if sf == folderTemplates {
+				project.TemplateFolder = filepath.Join(extractedProjectDir, sf)
+				foundTemplates = true
+			} else if sf == folderUnchecked {
+				project.SearchFolder = filepath.Join(extractedProjectDir, sf)
+				foundUnchecked = true
+			} else if sf == folderOutput {
+				project.OutputFolder = filepath.Join(extractedProjectDir, sf)
+				foundOutput = true
+			}
+		}
+		// Fallback to default names if custom names didn't match
+		if !foundTemplates {
+			for _, sf := range subfolders {
+				if sf == "templates" {
+					project.TemplateFolder = filepath.Join(extractedProjectDir, sf)
+					foundTemplates = true
+					break
+				}
+			}
+		}
+		if !foundUnchecked {
+			for _, sf := range subfolders {
+				if sf == "unchecked" {
+					project.SearchFolder = filepath.Join(extractedProjectDir, sf)
+					foundUnchecked = true
+					break
+				}
+			}
+		}
+		if !foundOutput {
+			for _, sf := range subfolders {
+				if sf == "output" {
+					project.OutputFolder = filepath.Join(extractedProjectDir, sf)
+					foundOutput = true
+					break
+				}
+			}
+		}
+		// If still not found, try first 3 subfolders as templates/unchecked/output
+		if !foundTemplates && len(subfolders) > 0 {
+			project.TemplateFolder = filepath.Join(extractedProjectDir, subfolders[0])
+		}
+		if !foundUnchecked && len(subfolders) > 1 {
+			project.SearchFolder = filepath.Join(extractedProjectDir, subfolders[1])
+		}
+		if !foundOutput && len(subfolders) > 2 {
+			project.OutputFolder = filepath.Join(extractedProjectDir, subfolders[2])
+		} else if !foundOutput {
+			project.OutputFolder = filepath.Join(extractedProjectDir, folderOutput)
+			os.MkdirAll(project.OutputFolder, 0755)
+		}
 	} else {
 		// Legacy format
 		project.TemplateFolder = filepath.Join(extractBase, "templates")

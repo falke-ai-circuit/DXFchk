@@ -28,8 +28,7 @@ const labelStyle: React.CSSProperties = {
 };
 
 export default function Dashboard() {
-  const {
-    health, fetchHealth,
+  const { health, fetchHealth,
     projects, fetchProjects,
     selectProject,
     createProject, deleteProject,
@@ -37,6 +36,7 @@ export default function Dashboard() {
     results, fetchResults,
     templateCount, fetchTemplates,
     logs,
+    settings, fetchSettings,
   } = useStore();
 
   const [showCreate, setShowCreate] = useState(false);
@@ -61,7 +61,8 @@ export default function Dashboard() {
     fetchCompareStatus();
     fetchResults();
     fetchTemplates();
-  }, [fetchHealth, fetchProjects, fetchCompareStatus, fetchResults, fetchTemplates]);
+    fetchSettings();
+  }, [fetchHealth, fetchProjects, fetchCompareStatus, fetchResults, fetchTemplates, fetchSettings]);
 
   const handleCreate = async () => {
     setError(null);
@@ -309,7 +310,7 @@ export default function Dashboard() {
             </div>
             <FolderInput label="Project Path (base directory for project folder)" value={projectPath} onChange={setProjectPath} onBrowse={() => setBrowserTarget('projectPath')} />
             <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '6px 0', fontFamily: 'var(--font-mono)' }}>
-              Creates: {projectPath || '{project_path}'} \ {projectNumber || '{project_number}'}_ {name || '{name}'} \ with templates/, unchecked/, output/ subfolders
+              Creates: {projectPath || '{project_path}'} \ {projectNumber || '{project_number}'}_{name || '{name}'} \ with {settings?.folder_templates || 'templates'}/, {settings?.folder_unchecked || 'unchecked'}/, {settings?.folder_output || 'output'}/ subfolders
             </div>
             <FolderInput label="Template Source Folder (DXF templates to copy)" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
             <FolderInput label="Unchecked Source Folder (DXF files to check)" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />

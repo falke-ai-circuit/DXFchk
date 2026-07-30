@@ -16,6 +16,9 @@ export interface SettingsResponse {
   auto_create_mod_templates: boolean;
   auto_apply_to_group: boolean;
   external_editor_path?: string;
+  folder_templates?: string;
+  folder_unchecked?: string;
+  folder_output?: string;
 }
 
 export interface Project {

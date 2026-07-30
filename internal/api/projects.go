@@ -135,14 +135,17 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 		// Build standardized project folder structure (LOGReport style):
 		// {ProjectPath}/{ProjectNumber}_{Name}/
-		//   templates/   ← DXF template files copied from source
-		//   unchecked/   ← DXF files to check copied from source
-		//   output/      ← comparison results (created empty)
+		//   {templates}/   ← DXF template files copied from source
+		//   {unchecked}/   ← DXF files to check copied from source
+		//   {output}/      ← comparison results (created empty)
+		// Folder names come from settings (configurable), defaults: templates, unchecked, output
+		folderTemplates, folderUnchecked, folderOutput := s.getFolderNames()
+
 		projectFolderName := fmt.Sprintf("%s_%s", req.ProjectNumber, slugify(req.Name))
 		projectDir := filepath.Join(req.ProjectPath, projectFolderName)
-		templateDir := filepath.Join(projectDir, "templates")
-		uncheckedDir := filepath.Join(projectDir, "unchecked")
-		outputDir := filepath.Join(projectDir, "output")
+		templateDir := filepath.Join(projectDir, folderTemplates)
+		uncheckedDir := filepath.Join(projectDir, folderUnchecked)
+		outputDir := filepath.Join(projectDir, folderOutput)
 
 		// Create folder structure
 		for _, dir := range []string{projectDir, templateDir, uncheckedDir, outputDir} {
@@ -312,6 +315,25 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	default:
 		ErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// getFolderNames returns the subfolder names from settings, with defaults
+func (s *Server) getFolderNames() (templates, unchecked, output string) {
+	templates = "templates"
+	unchecked = "unchecked"
+	output = "output"
+	if s.settings != nil {
+		if s.settings.FolderTemplates != "" {
+			templates = s.settings.FolderTemplates
+		}
+		if s.settings.FolderUnchecked != "" {
+			unchecked = s.settings.FolderUnchecked
+		}
+		if s.settings.FolderOutput != "" {
+			output = s.settings.FolderOutput
+		}
+	}
+	return
 }
 
 // copyDXFFolder copies all DXF files (recursively) from src to dst, preserving subfolder structure.

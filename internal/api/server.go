@@ -29,16 +29,19 @@ type Server struct {
 
 // Settings holds the application settings
 type Settings struct {
-	TemplateFolder    string `json:"template_folder"`
-	SearchFolder      string `json:"search_folder"`
-	OutputFolder      string `json:"output_folder"`
-	Recursive         bool   `json:"recursive"`
-	MoveFiles         bool   `json:"move_files"`
-	GroupByContent    bool   `json:"group_by_content"`
-	AutoCreateMod     bool   `json:"auto_create_mod_templates"`
-	AutoApplyToGroup  bool   `json:"auto_apply_to_group"`
-	ExternalEditorPath string `json:"external_editor_path"` // path to CAD editor exe, empty = use Windows default
-	ActiveProjectID   string `json:"active_project_id"`     // ID of the active project (for template folder lookup)
+	TemplateFolder     string `json:"template_folder"`
+	SearchFolder       string `json:"search_folder"`
+	OutputFolder       string `json:"output_folder"`
+	Recursive          bool   `json:"recursive"`
+	MoveFiles          bool   `json:"move_files"`
+	GroupByContent     bool   `json:"group_by_content"`
+	AutoCreateMod      bool   `json:"auto_create_mod_templates"`
+	AutoApplyToGroup   bool   `json:"auto_apply_to_group"`
+	ExternalEditorPath string `json:"external_editor_path"`
+	ActiveProjectID    string `json:"active_project_id"`
+	FolderTemplates    string `json:"folder_templates"`
+	FolderUnchecked    string `json:"folder_unchecked"`
+	FolderOutput       string `json:"folder_output"`
 }
 
 // CompareState holds the current comparison state
