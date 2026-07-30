@@ -5,7 +5,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -817,70 +816,4 @@ func computeBoundingBox(entitySets ...[]*DiffEntity) [4]float64 {
 		return [4]float64{0, 0, 100, 100}
 	}
 	return bbox
-}
-
-// handleCreateTemplate creates a new template from a mod folder file
-func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	var req struct {
-		SourceFile      string `json:"source_file"`       // DXF file to use as new template
-		TemplateFolder  string `json:"template_folder"`   // Where to save the new template
-		TemplateName    string `json:"template_name"`     // Name for the new template (optional, defaults to filename)
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		ErrorResponse(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	if req.SourceFile == "" {
-		ErrorResponse(w, http.StatusBadRequest, "source_file is required")
-		return
-	}
-	if _, err := os.Stat(req.SourceFile); os.IsNotExist(err) {
-		ErrorResponse(w, http.StatusBadRequest, "source file does not exist")
-		return
-	}
-
-	// Determine template folder
-	templateFolder := req.TemplateFolder
-	if templateFolder == "" {
-		templateFolder = s.settings.TemplateFolder
-	}
-	if templateFolder == "" {
-		ErrorResponse(w, http.StatusBadRequest, "template_folder is required")
-		return
-	}
-
-	// Determine template name
-	templateName := req.TemplateName
-	if templateName == "" {
-		templateName = filepath.Base(req.SourceFile)
-	}
-
-	// Copy the file to the template folder
-	destPath := filepath.Join(templateFolder, templateName)
-
-	// Read source
-	data, err := os.ReadFile(req.SourceFile)
-	if err != nil {
-		ErrorResponse(w, http.StatusInternalServerError, "failed to read source file: "+err.Error())
-		return
-	}
-
-	// Write to template folder
-	if err := os.WriteFile(destPath, data, 0644); err != nil {
-		ErrorResponse(w, http.StatusInternalServerError, "failed to write template: "+err.Error())
-		return
-	}
-
-	JSONResponse(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"message":  "template created",
-		"path":     destPath,
-		"name":     templateName,
-	})
 }

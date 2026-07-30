@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/falke-ai-circuit/DXFchk/internal/dxf"
 )
 
 // handleProjectExport exports a project configuration as a downloadable JSON file
@@ -330,4 +332,93 @@ func copyFileData(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
+}
+
+// CreateTemplateRequest is the body for POST /api/v1/template/create
+type CreateTemplateRequest struct {
+	SourceFile      string `json:"source_file"`      // DXF file to use as basis for new template
+	TemplateFolder  string `json:"template_folder"`   // Where to save the new template (optional, defaults to project template folder)
+	TemplateName    string `json:"template_name"`     // New template name (e.g. "VLV01_mod1") — becomes the $(TEMPLATE) attr value
+	SaveToModFolder bool   `json:"save_to_mod"`      // Also save in the mod folder for DNA Explorer editing
+}
+
+// handleCreateTemplate creates a new template from a _modN DXF file
+// by changing the $(TEMPLATE) attribute value to the new template name.
+//
+// Workflow:
+// 1. User has a _modN folder (e.g. VLV01_mod1) with files that differ from original template
+// 2. User picks one file from that folder as the basis for a new template
+// 3. This endpoint changes $(TEMPLATE) attr from "VLV01" to "VLV01_mod1"
+// 4. Saves the new template to:
+//    - The project's template folder (so it becomes a recognized template)
+//    - The _modN folder (for user to fix in DNA Explorer)
+// 5. User fixes the template in DNA Explorer, then applies it to all files in the group
+func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req CreateTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if req.SourceFile == "" {
+		ErrorResponse(w, http.StatusBadRequest, "source_file is required")
+		return
+	}
+	if req.TemplateName == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_name is required")
+		return
+	}
+
+	// Verify source file exists
+	if _, err := os.Stat(req.SourceFile); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusBadRequest, "source file does not exist: "+req.SourceFile)
+		return
+	}
+
+	// Determine template folder
+	templateFolder := req.TemplateFolder
+	if templateFolder == "" {
+		templateFolder = s.settings.TemplateFolder
+		if templateFolder == "" && s.settings.ActiveProjectID != "" {
+			store := loadProjects()
+			if proj, exists := store.Projects[s.settings.ActiveProjectID]; exists {
+				templateFolder = proj.TemplateFolder
+			}
+		}
+	}
+	if templateFolder == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_folder is required (set template_folder or activate a project)")
+		return
+	}
+
+	// Create the template by modifying $(TEMPLATE) attribute
+	// Save to template folder
+	templatePath := filepath.Join(templateFolder, req.TemplateName+".dxf")
+	oldTemplate, err := dxf.CreateTemplateFromFile(req.SourceFile, templatePath, req.TemplateName)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "failed to create template: "+err.Error())
+		return
+	}
+
+	// Also save in the mod folder for DNA Explorer editing
+	modFolderPath := ""
+	if req.SaveToModFolder {
+		modFolderPath = filepath.Join(filepath.Dir(req.SourceFile), req.TemplateName+".dxf")
+		copyFileData(templatePath, modFolderPath)
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"message":       fmt.Sprintf("Template '%s' created from '%s' (changed $(TEMPLATE) from '%s' to '%s')", req.TemplateName, filepath.Base(req.SourceFile), oldTemplate, req.TemplateName),
+		"old_template":  oldTemplate,
+		"new_template":  req.TemplateName,
+		"source_file":   req.SourceFile,
+		"template_path": templatePath,
+		"mod_path":      modFolderPath,
+	})
 }
