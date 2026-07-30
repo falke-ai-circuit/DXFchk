@@ -407,9 +407,9 @@ export default function DXFViewer({
         {gridLines}
 
         <g transform={groupTransform}>
-          {/* Origin axes */}
-          <line x1={-10000} y1={0} x2={10000} y2={0} stroke="#444" strokeWidth={1 / zoom} opacity={0.15} />
-          <line x1={0} y1={-10000} x2={0} y2={10000} stroke="#444" strokeWidth={1 / zoom} opacity={0.15} />
+          {/* Origin axes — short reference lines only, not spanning entire drawing */}
+          <line x1={-50} y1={0} x2={50} y2={0} stroke="#666" strokeWidth={1 / zoom} opacity={0.3} />
+          <line x1={0} y1={-50} x2={0} y2={50} stroke="#666" strokeWidth={1 / zoom} opacity={0.3} />
 
           {/* Entities in world space */}
           {entities.map((e, i) => {
@@ -505,5 +505,5 @@ export default function DXFViewer({
 }
 
 function entityKey(e: DiffEntity): string {
-  return `${e.type}:${e.block_name}:${(e.coords || []).map(c => c.toFixed(2)).join(',')}`;
+  return `${e.type}:${e.block_name || ''}:${(e.coords || []).map(c => c.toFixed(2)).join(',')}`;
 }

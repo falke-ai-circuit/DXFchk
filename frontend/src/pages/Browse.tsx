@@ -31,6 +31,21 @@ export default function Browse() {
 
   const outputFolder = activeProject?.output_folder || '';
 
+  // Compute layers and layer colors from diff entities for proper coloring
+  const diffLayers = diff ? [...new Set([
+    ...(diff.module_entities || []).map(e => e.layer).filter(Boolean),
+    ...(diff.template_entities || []).map(e => e.layer).filter(Boolean)
+  ])] : [];
+  const diffLayerColors: Record<string, number> = {};
+  if (diff) {
+    for (const e of [...(diff.module_entities || []), ...(diff.template_entities || [])]) {
+      if (e.layer && e.color > 0 && e.color < 256) {
+        const key = e.layer.toUpperCase();
+        if (!diffLayerColors[key]) diffLayerColors[key] = e.color;
+      }
+    }
+  }
+
   const loadTree = useCallback(async () => {
     if (!outputFolder) return;
     setLoading(true);
@@ -465,6 +480,8 @@ export default function Browse() {
                     <DXFViewer
                       entities={diff.module_entities || []}
                       boundingBox={diff.bounding_box}
+                      layers={diffLayers}
+                      layerColors={diffLayerColors}
                       highlightAdded={true}
                       addedSet={new Set((diff.added || []).map(e => entityKey(e)))}
                       removedSet={new Set((diff.removed || []).map(e => entityKey(e)))}
