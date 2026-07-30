@@ -194,7 +194,20 @@ func (c *ComparisonProcessor) handleNoTemplate(dxfFile string) {
 func (c *ComparisonProcessor) handleMatchingFile(dxfFile, templateName string) {
 	fileName := filepath.Base(dxfFile)
 	c.log(fmt.Sprintf("  -> Using template: %s", templateName))
-	c.log(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
+
+	// Get entity counts for detailed log
+	content, err := extractContent(dxfFile)
+	if err == nil {
+		blocksCount := 0
+		for _, v := range content.Blocks { blocksCount += len(v) }
+		linesCount := 0
+		for _, v := range content.Lines { linesCount += len(v) }
+		polyCount := 0
+		for _, v := range content.Polylines { polyCount += len(v) }
+		c.log(fmt.Sprintf("  -> MATCH: %s is identical to template (%d blocks, %d lines, %d polylines)", fileName, blocksCount, linesCount, polyCount))
+	} else {
+		c.log(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
+	}
 
 	safeName := sanitizeFilename(templateName)
 	dir := filepath.Join(c.OutputFolder, safeName)

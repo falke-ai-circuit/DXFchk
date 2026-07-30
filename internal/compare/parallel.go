@@ -175,8 +175,20 @@ func processFileParallel(dxfFile string, templateMap TemplateMap, groupByContent
 	// Compare
 	identical, content1, _ := compareFilesParallel(dxfFile, templatePath, logFn)
 	if identical {
-		logFn(fmt.Sprintf("  -> Using template: %s", templateName))
-		logFn(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
+		// Get entity counts for detailed log
+		if content1 != nil {
+			blocksCount := 0
+			for _, v := range content1.Blocks { blocksCount += len(v) }
+			linesCount := 0
+			for _, v := range content1.Lines { linesCount += len(v) }
+			polyCount := 0
+			for _, v := range content1.Polylines { polyCount += len(v) }
+			logFn(fmt.Sprintf("  -> Using template: %s", templateName))
+			logFn(fmt.Sprintf("  -> MATCH: %s is identical to template (%d blocks, %d lines, %d polylines)", fileName, blocksCount, linesCount, polyCount))
+		} else {
+			logFn(fmt.Sprintf("  -> Using template: %s", templateName))
+			logFn(fmt.Sprintf("  -> MATCH: %s is identical to template", fileName))
+		}
 		return fileDecision{FileName: fileName, FilePath: dxfFile, Status: "match", TemplateName: templateName}
 	}
 
