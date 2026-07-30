@@ -78,17 +78,33 @@ function polylineToPath(entity: DiffEntity): string {
   if (entity.closed && pts.length > 2) {
     const lastIdx = pts.length - 1;
     const lastBulge = bulges[lastIdx] || 0;
-    if (lastBulge === 0) {
-      path += ` L ${pts[0][0]} ${pts[0][1]}`;
-    } else {
-      const arc = bulgeToArc(pts[lastIdx][0], pts[lastIdx][1], pts[0][0], pts[0][1], lastBulge);
-      if (arc) {
-        path += ` A ${arc.rx} ${arc.ry} 0 ${arc.largeArc} ${arc.sweep} ${arc.x} ${arc.y}`;
-      } else {
+    // Check if closing line would create a diagonal longer than existing edges
+    // (3-point "closed" polylines from DXF border frames create diagonal artifacts)
+    const closeLen = Math.sqrt(
+      Math.pow(pts[0][0] - pts[lastIdx][0], 2) +
+      Math.pow(pts[0][1] - pts[lastIdx][1], 2)
+    );
+    // Calculate all edge lengths
+    const edgeLens = pts.slice(0, lastIdx).map((p, i) =>
+      Math.sqrt(Math.pow(pts[i+1][0]-p[0], 2) + Math.pow(pts[i+1][1]-p[1], 2))
+    );
+    const maxEdgeLen = Math.max(...edgeLens);
+    const minEdgeLen = Math.min(...edgeLens);
+    // Only draw closing line if it's not longer than 1.5x the shortest edge
+    // This prevents diagonal artifacts from 3-point "closed" border frame polylines
+    // where the closing line is the diagonal of the rectangle
+    if (closeLen <= minEdgeLen * 1.5) {
+      if (lastBulge === 0) {
         path += ` L ${pts[0][0]} ${pts[0][1]}`;
+      } else {
+        const arc = bulgeToArc(pts[lastIdx][0], pts[lastIdx][1], pts[0][0], pts[0][1], lastBulge);
+        if (arc) {
+          path += ` A ${arc.rx} ${arc.ry} 0 ${arc.largeArc} ${arc.sweep} ${arc.x} ${arc.y}`;
+        } else {
+          path += ` L ${pts[0][0]} ${pts[0][1]}`;
+        }
       }
     }
-    path += ' Z';
   }
 
   return path;
