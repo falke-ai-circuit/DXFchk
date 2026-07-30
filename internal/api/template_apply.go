@@ -225,17 +225,33 @@ func buildTemplateGroups(outputFolder string) []TemplateGroup {
 
 // ApplyTemplateRequest is the body for POST /api/v1/template/apply
 type ApplyTemplateRequest struct {
-	TemplatePath string `json:"template_path"` // path to the fixed template file
-	GroupName    string `json:"group_name"`    // template group name (e.g. "BI001")
-	OutputFolder string `json:"output_folder"` // output folder to apply to
+	TemplatePath string `json:"template_path"` // path to the fixed template DXF file
+	GroupName    string `json:"group_name"`    // template group name (e.g. "VLV01_mod1")
+	OutputFolder string `json:"output_folder"` // output folder (optional, uses project default)
+	DryRun       bool   `json:"dry_run"`       // if true, don't write files, just report what would change
 }
 
-// handleApplyTemplate applies a fixed template to all files in a group
-// This implements the "fix 90 templates instead of 1500 files" workflow:
-// 1. User fixes a template DXF file in a _modN folder
-// 2. User calls this endpoint to apply that fixed template to all files in that group
-// 3. The fixed template replaces the original template
-// 4. Optionally re-run comparison for that group only
+// ApplyFileResult holds the result of applying template to one module file
+type ApplyFileResult struct {
+	File          string `json:"file"`
+	Success       bool   `json:"success"`
+	Error         string `json:"error,omitempty"`
+	TemplateInserts int  `json:"template_inserts"`
+	ModuleInserts   int  `json:"module_inserts"`
+	Matched         int  `json:"matched"`
+	Added           int  `json:"added_from_template"`
+	Removed         int  `json:"removed_from_module"`
+}
+
+// handleApplyTemplate applies a fixed template to all files in a group.
+//
+// Workflow:
+// 1. User creates template from _modN file (POST /api/v1/template/create)
+// 2. User fixes the template in DNA Explorer (moves blocks, adds/removes I/O, etc.)
+// 3. User calls this endpoint to apply the fixed template to all files in the group
+// 4. For each module file: template block STRUCTURE replaces module's block structure,
+//    but module's ATTRIB VALUES (device tags, I/O names, area refs) are preserved
+// 5. $(TEMPLATE) attribute updated to new template name
 func (s *Server) handleApplyTemplate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
@@ -272,12 +288,30 @@ func (s *Server) handleApplyTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find all mod folders for this group
+	// Find the _modN folder(s) for this group
+	// GroupName can be either:
+	//   - A specific _modN folder name (e.g. "VLV01_mod1") → apply to that folder only
+	//   - A base template name (e.g. "VLV01") → apply to ALL _modN folders for that template
 	groups := buildTemplateGroups(outputFolder)
 	var targetGroup *TemplateGroup
 	for i := range groups {
 		if groups[i].TemplateName == req.GroupName {
 			targetGroup = &groups[i]
+			break
+		}
+		// Also check if GroupName matches a specific _modN folder within this group
+		for _, mod := range groups[i].ModFolders {
+			if mod.FolderName == req.GroupName {
+				// Create a group with just this one mod folder
+				targetGroup = &TemplateGroup{
+					TemplateName: groups[i].TemplateName,
+					ModFolders:   []ModGroup{mod},
+					TotalFiles:   mod.FileCount,
+				}
+				break
+			}
+		}
+		if targetGroup != nil {
 			break
 		}
 	}
@@ -286,14 +320,55 @@ func (s *Server) handleApplyTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy the fixed template to the template folder (overwriting original)
-	templateDir := filepath.Join(outputFolder, req.GroupName)
-	os.MkdirAll(templateDir, 0755)
-	fixedTemplateTarget := filepath.Join(templateDir, req.GroupName+".dxf")
-	copyFileData(req.TemplatePath, fixedTemplateTarget)
+	// Determine the new template name
+	// If GroupName contains _mod, use it directly; otherwise use the base template name
+	newTemplateName := req.GroupName
 
-	// Also copy the fixed template to the project's template folder
-	// Use active project's template_folder if global settings don't have one
+	// Apply the template to each module file in each mod folder
+	var fileResults []ApplyFileResult
+	totalApplied := 0
+	totalErrors := 0
+
+	for _, mod := range targetGroup.ModFolders {
+		for _, fileName := range mod.Files {
+			modPath := filepath.Join(mod.FolderPath, fileName)
+			var outputPath string
+
+			if req.DryRun {
+				// Don't write, just report
+				outputPath = filepath.Join(os.TempDir(), "dxfchk_dryrun.dxf")
+			} else {
+				// Write back to the same file (in-place update)
+				outputPath = modPath
+			}
+
+			result, err := dxf.ApplyTemplateToModule(req.TemplatePath, modPath, outputPath, newTemplateName)
+			fr := ApplyFileResult{
+				File:            fileName,
+				Success:         err == nil && result.Success,
+				TemplateInserts: result.TemplateInserts,
+				ModuleInserts:   result.ModuleInserts,
+				Matched:         result.Matched,
+				Added:           result.AddedFromTemplate,
+				Removed:         result.RemovedFromModule,
+			}
+			if err != nil {
+				fr.Error = err.Error()
+				totalErrors++
+			} else {
+				totalApplied++
+			}
+
+			// Clean up dry run temp file
+			if req.DryRun {
+				os.Remove(outputPath)
+			}
+
+			fileResults = append(fileResults, fr)
+		}
+	}
+
+	// Also update the template file in the template folder
 	templateFolder := s.settings.TemplateFolder
 	if templateFolder == "" && s.settings.ActiveProjectID != "" {
 		store := loadProjects()
@@ -301,27 +376,21 @@ func (s *Server) handleApplyTemplate(w http.ResponseWriter, r *http.Request) {
 			templateFolder = proj.TemplateFolder
 		}
 	}
-	if templateFolder != "" {
+	if templateFolder != "" && !req.DryRun {
 		projectTemplateTarget := filepath.Join(templateFolder, req.GroupName+".dxf")
 		copyFileData(req.TemplatePath, projectTemplateTarget)
 	}
 
-	appliedCount := 0
-	// For each mod folder, copy the fixed template as a reference
-	for _, mod := range targetGroup.ModFolders {
-		// Place a copy of the fixed template in each mod folder for reference
-		fixedInMod := filepath.Join(mod.FolderPath, req.GroupName+"_fixed.dxf")
-		copyFileData(req.TemplatePath, fixedInMod)
-		appliedCount++
-	}
-
 	JSONResponse(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"message":        fmt.Sprintf("Template applied to group %s (%d mod folders)", req.GroupName, appliedCount),
-		"group":          req.GroupName,
-		"mod_folders":    appliedCount,
-		"total_files":    targetGroup.TotalFiles,
-		"template_path":  fixedTemplateTarget,
+		"ok":           totalErrors == 0,
+		"message":      fmt.Sprintf("Template applied to group %s: %d files updated, %d errors", req.GroupName, totalApplied, totalErrors),
+		"group":        req.GroupName,
+		"template":     req.TemplatePath,
+		"files_updated": totalApplied,
+		"errors":       totalErrors,
+		"total_files":  targetGroup.TotalFiles,
+		"file_results": fileResults,
+		"dry_run":      req.DryRun,
 	})
 }
 

@@ -36,7 +36,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	running := s.jobs.RunningJobs()
 	JSONResponse(w, http.StatusOK, map[string]any{
 		"status":         "ok",
-		"version":        "v0.7.3",
+		"version":        "v0.8.0",
 		"running":        len(running) > 0,
 		"running_jobs":   len(running),
 	})
