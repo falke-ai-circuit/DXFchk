@@ -388,10 +388,10 @@ export const api = {
   },
 
   // Open DXF in external editor
-  openExternal: (filePath: string) =>
+  openExternal: (filePath: string, editorPath?: string) =>
     apiFetch<{ ok: boolean; launched: boolean; editor: string }>('/api/v1/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath }),
+      body: JSON.stringify({ path: filePath, editor_path: editorPath }),
     }),
 };

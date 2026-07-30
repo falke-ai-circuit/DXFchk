@@ -28,6 +28,9 @@ export default function Browse() {
   const [renderLoading, setRenderLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string } | null>(null);
   const [externalMsg, setExternalMsg] = useState<string | null>(null);
+  const [showOpenWith, setShowOpenWith] = useState(false);
+  const [openWithFile, setOpenWithFile] = useState<string>('');
+  const [customEditorPath, setCustomEditorPath] = useState<string>('');
 
   const outputFolder = activeProject?.output_folder || '';
 
@@ -263,11 +266,12 @@ export default function Browse() {
     }
   };
 
-  const handleOpenExternal = async (filePath: string) => {
+  const handleOpenExternal = async (filePath: string, editorPath?: string) => {
     setExternalMsg('Opening in external editor...');
     setContextMenu(null);
+    setShowOpenWith(false);
     try {
-      const resp = await api.openExternal(filePath);
+      const resp = await api.openExternal(filePath, editorPath);
       setExternalMsg(`✓ Opened in ${resp.editor || 'default editor'}`);
     } catch (err) {
       setExternalMsg(`✗ Failed: ${err instanceof Error ? err.message : 'unknown'}`);
@@ -470,12 +474,18 @@ export default function Browse() {
                   /* Single view — module DXF with differences highlighted */
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                     <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px', backgroundColor: 'var(--bg-secondary)' }}>
+
                       <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
                         {selectedFile?.split('\\').pop()}
                       </span>
                       <span style={{ color: 'var(--text-muted)' }}>vs {templatePath?.split('\\').pop()}</span>
                       {diff.summary.added_count > 0 && <span style={{ color: 'var(--error)' }}>+{diff.summary.added_count} added</span>}
                       {diff.summary.removed_count > 0 && <span style={{ color: 'var(--warning)' }}>-{diff.summary.removed_count} removed</span>}
+                      {diff.summary.added_count === 0 && diff.summary.removed_count === 0 && (
+                        <span style={{ color: 'var(--success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          ✓ Identical to template
+                        </span>
+                      )}
                     </div>
                     <DXFViewer
                       entities={diff.module_entities || []}
@@ -571,6 +581,84 @@ export default function Browse() {
         </div>
       )}
 
+      {/* Open with... modal popup */}
+      {showOpenWith && (
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}
+          onClick={() => setShowOpenWith(false)}
+        >
+          <div
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 8, padding: '20px 24px', minWidth: 400, maxWidth: 500, boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ExternalLink size={16} color="var(--accent)" />
+              Open with...
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16, fontFamily: 'var(--font-mono)' }}>
+              {openWithFile.split('\\').pop()}
+            </div>
+
+            {/* Default program */}
+            <button
+              className="btn btn-secondary"
+              style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8, padding: '10px 12px', fontSize: 13 }}
+              onClick={() => handleOpenExternal(openWithFile)}
+            >
+              <FileText size={14} color="var(--text-muted)" style={{ marginRight: 8 }} />
+              Default program
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>Windows association</span>
+            </button>
+
+            {/* BricsCAD */}
+            <button
+              className="btn btn-secondary"
+              style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 8, padding: '10px 12px', fontSize: 13 }}
+              onClick={() => handleOpenExternal(openWithFile, 'C:\\Program Files\\Bricsys\\BricsCAD V22 en_US\\bricscad.exe')}
+            >
+              <FileText size={14} color="var(--accent)" style={{ marginRight: 8 }} />
+              BricsCAD
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>V22 en_US</span>
+            </button>
+
+            {/* Choose program... */}
+            <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0', paddingTop: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>Choose program...</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="C:\Program Files\...\editor.exe"
+                  value={customEditorPath}
+                  onChange={(e) => setCustomEditorPath(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && customEditorPath.trim()) handleOpenExternal(openWithFile, customEditorPath.trim()); }}
+                  style={{
+                    flex: 1, padding: '8px 10px', fontSize: 12, fontFamily: 'var(--font-mono)',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4,
+                    color: 'var(--text-primary)', outline: 'none',
+                  }}
+                />
+                <button
+                  className="btn btn-primary"
+                  style={{ padding: '8px 16px', fontSize: 12 }}
+                  disabled={!customEditorPath.trim()}
+                  onClick={() => handleOpenExternal(openWithFile, customEditorPath.trim())}
+                >
+                  Open
+                </button>
+              </div>
+            </div>
+
+            <button
+              className="btn btn-ghost"
+              style={{ width: '100%', marginTop: 12, padding: '6px', fontSize: 11 }}
+              onClick={() => setShowOpenWith(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Right-click context menu */}
       {contextMenu && (
         <div
@@ -583,13 +671,13 @@ export default function Browse() {
           onClick={(e) => e.stopPropagation()}
         >
           <div
-            onClick={() => { handleOpenExternal(contextMenu.filePath); }}
+            onClick={() => { setOpenWithFile(contextMenu.filePath); setShowOpenWith(true); setCustomEditorPath(''); setContextMenu(null); }}
             style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,138,0,0.1)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
             <ExternalLink size={14} color="var(--accent)" />
-            Open in external editor
+            Open with...
           </div>
           <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
           <div

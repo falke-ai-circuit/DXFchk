@@ -277,8 +277,12 @@ export default function DXFViewer({
     if (!e || !e.coords) return null;
     const color = entityColor(e);
     const isHovered = hoveredEntity === i;
-    const strokeW = isHovered ? 2 : Math.max(0.5, 1.5 / zoom);
-    const opacity = isHovered ? 1 : 0.85;
+    // Thinner strokes for BricsCAD-like appearance
+    const strokeW = isHovered ? 2 : Math.max(0.3, 1 / zoom);
+    const opacity = isHovered ? 1 : 0.9;
+    // Dashed line support for hidden layers
+    const isHiddenLayer = e.layer ? e.layer.toUpperCase().includes('HIDDEN') : false;
+    const dashArray = isHiddenLayer ? '4 2' : undefined;
 
     switch (e.type) {
       case 'line':
@@ -286,6 +290,7 @@ export default function DXFViewer({
           return (
             <line key={i} x1={e.coords[0]} y1={-e.coords[1]} x2={e.coords[2]} y2={-e.coords[3]}
               stroke={color} strokeWidth={strokeW} opacity={opacity}
+              strokeDasharray={dashArray}
               vectorEffect="non-scaling-stroke"
               onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
             />
@@ -300,6 +305,7 @@ export default function DXFViewer({
         const path = polylineToPath({ ...e, coords_2d: pts });
         return path ? (
           <path key={i} d={path} fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+            strokeDasharray={dashArray}
             vectorEffect="non-scaling-stroke"
             onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
           />
@@ -314,6 +320,7 @@ export default function DXFViewer({
           }
           return (
             <path key={i} d={pathD} fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+              strokeDasharray={dashArray}
               vectorEffect="non-scaling-stroke"
               onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
             />
@@ -344,6 +351,7 @@ export default function DXFViewer({
               {(!e.block_entities || e.block_entities.length === 0) && (
                 <rect x={-3 / sx} y={-3 / sy} width={6 / sx} height={6 / sy}
                   fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+                  strokeDasharray={dashArray}
                   vectorEffect="non-scaling-stroke"
                 />
               )}
@@ -364,8 +372,8 @@ export default function DXFViewer({
         const vAlign = e.v_align || 0;
         const anchor = HALIGN_MAP[hAlign] || 'start';
         const baseline = VALIGN_MAP[vAlign] || 'alphabetic';
-        // Minimum readable font: 7px on screen
-        const actualFontSize = Math.max(rawHeight, 7 / zoom);
+        // Minimum readable font: 4px on screen (smaller so text doesn't bloat when zoomed out)
+        const actualFontSize = Math.max(rawHeight, 4 / zoom);
         return (
           <text key={i} x={tx_} y={ty_} fill={color} fontSize={actualFontSize}
             fontFamily="sans-serif" textAnchor={anchor as any}
@@ -384,6 +392,7 @@ export default function DXFViewer({
         return (
           <circle key={i} cx={e.coords[0]} cy={-e.coords[1]} r={e.coords[2]}
             fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+            strokeDasharray={dashArray}
             vectorEffect="non-scaling-stroke"
             onMouseEnter={() => setHoveredEntity(i)} onMouseLeave={() => setHoveredEntity(null)}
           />
