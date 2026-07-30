@@ -42,14 +42,15 @@ export default function Dashboard() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [name, setName] = useState('');
+  const [projectNumber, setProjectNumber] = useState('');
+  const [projectPath, setProjectPath] = useState('');
   const [templateFolder, setTemplateFolder] = useState('');
   const [searchFolder, setSearchFolder] = useState('');
-  const [outputFolder, setOutputFolder] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [browserTarget, setBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
+  const [browserTarget, setBrowserTarget] = useState<'projectPath' | 'template' | 'search' | 'output' | null>(null);
   const [editBrowserTarget, setEditBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
   const fileImportRef = useRef<HTMLInputElement>(null);
   const zipImportRef = useRef<HTMLInputElement>(null);
@@ -65,13 +66,15 @@ export default function Dashboard() {
   const handleCreate = async () => {
     setError(null);
     if (!name) { setError('Project name is required'); return; }
-    if (!templateFolder) { setError('Template folder is required'); return; }
-    if (!searchFolder) { setError('Search folder is required'); return; }
+    if (!projectNumber) { setError('Project number is required'); return; }
+    if (!projectPath) { setError('Project path (base directory) is required'); return; }
+    if (!templateFolder) { setError('Source template folder is required'); return; }
+    if (!searchFolder) { setError('Source unchecked folder is required'); return; }
     setCreating(true);
     try {
-      await createProject({ name, template_folder: templateFolder, search_folder: searchFolder, output_folder: outputFolder || undefined });
+      await createProject({ name, project_number: projectNumber, project_path: projectPath, template_folder: templateFolder, search_folder: searchFolder });
       setShowCreate(false);
-      setName(''); setTemplateFolder(''); setSearchFolder(''); setOutputFolder('');
+      setName(''); setProjectNumber(''); setProjectPath(''); setTemplateFolder(''); setSearchFolder('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
     }
@@ -120,9 +123,9 @@ export default function Dashboard() {
 
   // Inline settings handlers
   const handleBrowserSelect = (path: string) => {
-    if (browserTarget === 'template') setTemplateFolder(path);
+    if (browserTarget === 'projectPath') setProjectPath(path);
+    else if (browserTarget === 'template') setTemplateFolder(path);
     else if (browserTarget === 'search') setSearchFolder(path);
-    else if (browserTarget === 'output') setOutputFolder(path);
     setBrowserTarget(null);
   };
   const handleEditBrowserSelect = (path: string) => {
@@ -200,7 +203,7 @@ export default function Dashboard() {
             <ChevronDown size={18} color="var(--accent)" style={{ transition: 'transform 0.2s', transform: 'rotate(0deg)' }} />
             <FolderCog size={18} color="var(--accent)" />
             <span style={{ fontSize: '16px', fontWeight: 600 }}>
-              {editingProject.id.toUpperCase()} — {editingProject.name}
+              {editingProject.project_number ? editingProject.project_number.toUpperCase() : editingProject.id.toUpperCase()} — {editingProject.name}
             </span>
             <span className="badge badge-success" style={{ marginLeft: 'auto' }}>Active</span>
           </div>
@@ -215,6 +218,12 @@ export default function Dashboard() {
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Last Used</div>
               <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)' }}>{new Date(editingProject.last_used).toLocaleString()}</div>
             </div>
+            {editingProject.project_path && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Project Path</div>
+                <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)' }}>{editingProject.project_path}</div>
+              </div>
+            )}
           </div>
 
           {/* Editable settings */}
@@ -288,13 +297,22 @@ export default function Dashboard() {
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div>
-              <label style={labelStyle}>Project Name</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse Comparison" style={inputStyle} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div>
+                <label style={labelStyle}>Project Number</label>
+                <input type="text" value={projectNumber} onChange={(e) => setProjectNumber(e.target.value)} placeholder="e.g. ECLIPSE-V04-TEST" style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Project Name</label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse v04 Test" style={inputStyle} />
+              </div>
             </div>
-            <FolderInput label="Template Folder" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
-            <FolderInput label="Search Folder" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />
-            <FolderInput label="Output Folder (optional)" value={outputFolder} onChange={setOutputFolder} onBrowse={() => setBrowserTarget('output')} />
+            <FolderInput label="Project Path (base directory for project folder)" value={projectPath} onChange={setProjectPath} onBrowse={() => setBrowserTarget('projectPath')} />
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '6px 0', fontFamily: 'var(--font-mono)' }}>
+              Creates: {projectPath || '{project_path}'} \ {projectNumber || '{project_number}'}_ {name || '{name}'} \ with templates/, unchecked/, output/ subfolders
+            </div>
+            <FolderInput label="Template Source Folder (DXF templates to copy)" value={templateFolder} onChange={setTemplateFolder} onBrowse={() => setBrowserTarget('template')} />
+            <FolderInput label="Unchecked Source Folder (DXF files to check)" value={searchFolder} onChange={setSearchFolder} onBrowse={() => setBrowserTarget('search')} />
             <div style={{ display: 'flex', gap: '8px' }}>
               <button className="btn btn-primary" onClick={handleCreate} disabled={creating}>
                 {creating ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Create
@@ -337,12 +355,12 @@ export default function Dashboard() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: 14, fontWeight: 600 }}>
-                    {p.id.toUpperCase()} — {p.name}
+                    {p.project_number ? p.project_number.toUpperCase() : p.id.toUpperCase()} — {p.name}
                   </span>
                   {isExpanded && <span className="badge badge-success" style={{ fontSize: 9, padding: '1px 6px' }}>Active</span>}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.template_folder.split('\\\\').pop()} <ArrowRight size={10} style={{ display: 'inline', verticalAlign: 'middle' }} /> {p.search_folder.split('\\\\').pop()}
+                  {p.project_path ? p.project_path.split('\\\\\\\\').pop() : `${p.template_folder.split('\\\\\\\\').pop()} → ${p.search_folder.split('\\\\\\\\').pop()}`}
                 </div>
               </div>
               <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(p.last_used).toLocaleDateString()}</span>
@@ -385,7 +403,7 @@ export default function Dashboard() {
       {/* Folder Browser Modals */}
       {browserTarget && (
         <FolderBrowser
-          initialPath={browserTarget === 'template' ? templateFolder : browserTarget === 'search' ? searchFolder : outputFolder}
+          initialPath={browserTarget === 'projectPath' ? projectPath : browserTarget === 'template' ? templateFolder : searchFolder}
           onSelect={handleBrowserSelect} onClose={() => setBrowserTarget(null)}
         />
       )}

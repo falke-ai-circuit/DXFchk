@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // FolderEntry represents a folder or drive for the folder browser
@@ -133,7 +134,25 @@ func (s *Server) handleProjectZipExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Create zip in memory or temp file
+	// Determine the project root folder to zip
+	// For standardized projects: project.ProjectPath is the full project dir
+	// For legacy projects: fall back to using template/search folders
+	projectDir := project.ProjectPath
+	if projectDir == "" {
+		// Legacy mode — zip individual folders
+		projectDir = project.OutputFolder
+		if projectDir == "" {
+			ErrorResponse(w, http.StatusBadRequest, "project has no project_path or output_folder")
+			return
+		}
+	}
+
+	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusNotFound, "project folder does not exist: "+projectDir)
+		return
+	}
+
+	// Create zip in temp
 	zipPath := filepath.Join(os.TempDir(), project.ID+"_export.zip")
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -151,17 +170,10 @@ func (s *Server) handleProjectZipExport(w http.ResponseWriter, r *http.Request) 
 		configWriter.Write(configData)
 	}
 
-	// Add template folder contents
-	addFolderToZip(zipWriter, project.TemplateFolder, "templates/")
-	// Add search folder contents
-	addFolderToZip(zipWriter, project.SearchFolder, "search/")
-
-	// Add output folder if exists
-	if project.OutputFolder != "" {
-		if _, err := os.Stat(project.OutputFolder); err == nil {
-			addFolderToZip(zipWriter, project.OutputFolder, "output/")
-		}
-	}
+	// For standardized projects, zip the entire project folder (templates/ + unchecked/ + output/)
+	// The top-level folder name in the zip is the project folder name (e.g., ECLIPSE-V04-TEST_Eclipse-v04-test/)
+	topLevelName := filepath.Base(projectDir)
+	addFolderToZipNamed(zipWriter, projectDir, topLevelName+"/")
 
 	zipWriter.Close()
 
@@ -234,21 +246,34 @@ func (s *Server) handleProjectZipImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Determine base path for extraction
-	// Extract to a new folder based on project name
+	// Find the top-level folder name from the zip (e.g., ECLIPSE-V04-TEST_Eclipse-v04-test/)
+	var topLevelFolder string
+	for _, f := range zipReader.File {
+		parts := strings.SplitN(strings.TrimPrefix(f.Name, "/"), "/", 2)
+		if len(parts) > 0 && parts[0] != "" && parts[0] != "project.json" {
+			topLevelFolder = parts[0]
+			break
+		}
+	}
+
+	// Determine extraction base: user home / .dxfchk / imported
 	homeDir, _ := os.UserHomeDir()
-	extractBase := filepath.Join(homeDir, ".dxfchk", "imported", project.ID)
+	extractBase := filepath.Join(homeDir, ".dxfchk", "imported")
 	os.MkdirAll(extractBase, 0755)
 
-	// Extract all files
+	// Extract all files, preserving the top-level folder structure
 	for _, f := range zipReader.File {
+		if f.Name == "project.json" {
+			continue
+		}
+
+		targetPath := filepath.Join(extractBase, f.Name)
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(filepath.Join(extractBase, f.Name), 0755)
+			os.MkdirAll(targetPath, 0755)
 			continue
 		}
 
 		// Create parent dir
-		targetPath := filepath.Join(extractBase, f.Name)
 		os.MkdirAll(filepath.Dir(targetPath), 0755)
 
 		rc, err := f.Open()
@@ -266,19 +291,31 @@ func (s *Server) handleProjectZipImport(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Update project paths to point to extracted locations
-	project.TemplateFolder = filepath.Join(extractBase, "templates")
-	project.SearchFolder = filepath.Join(extractBase, "search")
-	if _, err := os.Stat(filepath.Join(extractBase, "output")); err == nil {
-		project.OutputFolder = filepath.Join(extractBase, "output")
+	// Standardized structure: {extractBase}/{topLevelFolder}/{templates|unchecked|output}/
+	if topLevelFolder != "" {
+		extractedProjectDir := filepath.Join(extractBase, topLevelFolder)
+		project.ProjectPath = extractedProjectDir
+		project.TemplateFolder = filepath.Join(extractedProjectDir, "templates")
+		project.SearchFolder = filepath.Join(extractedProjectDir, "unchecked")
+		project.OutputFolder = filepath.Join(extractedProjectDir, "output")
+		// Ensure output dir exists
+		os.MkdirAll(project.OutputFolder, 0755)
 	} else {
-		project.OutputFolder = filepath.Join(project.SearchFolder, "DXFchk_output")
+		// Legacy format
+		project.TemplateFolder = filepath.Join(extractBase, "templates")
+		project.SearchFolder = filepath.Join(extractBase, "search")
+		if _, err := os.Stat(filepath.Join(extractBase, "output")); err == nil {
+			project.OutputFolder = filepath.Join(extractBase, "output")
+		} else {
+			project.OutputFolder = filepath.Join(project.SearchFolder, "DXFchk_output")
+		}
 	}
 
 	// Register project
 	store := loadProjects()
 	id := project.ID
 	if _, exists := store.Projects[id]; exists {
-		id = id + "_imported_" + filepath.Base(extractBase)
+		id = id + "_imported_" + time.Now().Format("150405")
 		project.ID = id
 	}
 	project.ID = id
@@ -289,12 +326,19 @@ func (s *Server) handleProjectZipImport(w http.ResponseWriter, r *http.Request) 
 	JSONResponse(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"project": project,
-		"message": "Project imported and extracted to " + extractBase,
+		"message": "Project imported and extracted to " + filepath.Join(extractBase, topLevelFolder),
 	})
 }
 
 // addFolderToZip adds all files from a folder to the zip under a prefix
+// addFolderToZip adds all files from a folder to the zip under a prefix
 func addFolderToZip(zipWriter *zip.Writer, folderPath, prefix string) {
+	addFolderToZipNamed(zipWriter, folderPath, prefix)
+}
+
+// addFolderToZipNamed adds all files from a folder to the zip, using the folder's
+// own name as the top-level directory in the zip (preserving the folder name).
+func addFolderToZipNamed(zipWriter *zip.Writer, folderPath, zipPrefix string) {
 	if folderPath == "" {
 		return
 	}
@@ -313,10 +357,9 @@ func addFolderToZip(zipWriter *zip.Writer, folderPath, prefix string) {
 			return nil
 		}
 
-		zipPath := prefix + relPath
+		zipPath := zipPrefix + relPath
 		// Use forward slashes in zip
 		zipPath = strings.ReplaceAll(zipPath, "\\", "/")
-
 		if info.IsDir() {
 			// Create directory entry in zip
 			if !strings.HasSuffix(zipPath, "/") {

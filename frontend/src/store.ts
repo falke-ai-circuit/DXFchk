@@ -16,7 +16,7 @@ interface StoreState {
   activeProject: Project | null;
   fetchProjects: () => Promise<void>;
   selectProject: (id: string) => Promise<void>;
-  createProject: (data: { name: string; template_folder: string; search_folder: string; output_folder?: string; recursive?: boolean; group_by_content?: boolean }) => Promise<Project>;
+  createProject: (data: { name: string; project_number: string; project_path: string; template_folder: string; search_folder: string; output_folder?: string; recursive?: boolean; group_by_content?: boolean }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
 
   // Compare

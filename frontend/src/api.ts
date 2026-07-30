@@ -21,6 +21,8 @@ export interface SettingsResponse {
 export interface Project {
   id: string;
   name: string;
+  project_number?: string;
+  project_path?: string;
   template_folder: string;
   search_folder: string;
   output_folder: string;
@@ -242,7 +244,7 @@ export const api = {
 
   // Projects
   getProjects: () => apiFetch<ProjectsResponse>('/api/v1/projects'),
-  createProject: (data: { name: string; template_folder: string; search_folder: string; output_folder?: string; recursive?: boolean; group_by_content?: boolean }) =>
+  createProject: (data: { name: string; project_number: string; project_path: string; template_folder: string; search_folder: string; output_folder?: string; recursive?: boolean; group_by_content?: boolean }) =>
     apiFetch<{ ok: boolean; project: Project }>('/api/v1/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
