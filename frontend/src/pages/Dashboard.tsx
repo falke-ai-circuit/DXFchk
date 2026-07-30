@@ -336,7 +336,7 @@ export default function Dashboard() {
                 <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Eclipse v04 Test" style={inputStyle} />
               </div>
             </div>
-            <FolderInput label="Project Path (base directory for project folder)" value={projectPath} onChange={setProjectPath} onBrowse={() => setBrowserTarget('projectPath')} />
+            <FolderInput label="Project Path (base directory, . = dxfchk location)" value={projectPath} onChange={setProjectPath} onBrowse={() => setBrowserTarget('projectPath')} />
             <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '6px 0', fontFamily: 'var(--font-mono)' }}>
               Creates: {projectPath || '{project_path}'} \ {projectNumber || '{project_number}'}_{name || '{name}'} \ with {settings?.folder_templates || 'templates'}/, {settings?.folder_unchecked || 'unchecked'}/, {settings?.folder_output || 'output'}/ subfolders
             </div>

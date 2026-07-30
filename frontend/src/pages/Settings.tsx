@@ -128,18 +128,21 @@ export default function Settings() {
       {/* Default Folders */}
       <div className="card" style={{ marginBottom: '16px' }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '16px' }}>Default Folders</h2>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: '16px' }}>
+          Use <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>.</code> for paths relative to the dxfchk.exe location.
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
             <label style={labelStyle}>Template Folder</label>
-            <input type="text" value={form.template_folder} onChange={(e) => setForm({ ...form, template_folder: e.target.value })} placeholder="C:\path\to\templates" style={inputStyle} />
+            <input type="text" value={form.template_folder} onChange={(e) => setForm({ ...form, template_folder: e.target.value })} placeholder="./templates" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Search Folder</label>
-            <input type="text" value={form.search_folder} onChange={(e) => setForm({ ...form, search_folder: e.target.value })} placeholder="C:\path\to\search" style={inputStyle} />
+            <input type="text" value={form.search_folder} onChange={(e) => setForm({ ...form, search_folder: e.target.value })} placeholder="./unchecked" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Output Folder</label>
-            <input type="text" value={form.output_folder} onChange={(e) => setForm({ ...form, output_folder: e.target.value })} placeholder="C:\path\to\output" style={inputStyle} />
+            <input type="text" value={form.output_folder} onChange={(e) => setForm({ ...form, output_folder: e.target.value })} placeholder="./output" style={inputStyle} />
           </div>
         </div>
       </div>
