@@ -225,92 +225,81 @@ func findEntitiesSection(lines []string) (start, end int) {
 func extractInsertEntities(lines []string, start, end int) []insertEntity {
 	var inserts []insertEntity
 
-	for i := start; i < end; i++ {
-		if strings.TrimSpace(lines[i]) == "0" && i+1 < len(lines) {
-			if strings.TrimSpace(lines[i+1]) == "INSERT" {
-				ins := insertEntity{
-					startIdx: i,
-					attribs:  make(map[string]string),
-				}
-				// Collect all lines until the next "0" code that starts a new entity (not ATTRIB)
-				j := i + 1
-				ins.lines = append(ins.lines, lines[i]) // "0"
-				ins.lines = append(ins.lines, lines[i+1]) // "INSERT"
+	i := start
+	for i < end-1 {
+		if strings.TrimSpace(lines[i]) == "0" && strings.TrimSpace(lines[i+1]) == "INSERT" {
+			ins := insertEntity{
+				startIdx: i,
+				attribs:  make(map[string]string),
+			}
+			// Collect all lines for this INSERT entity (including ATTRIBs)
+			// DXF format: code on even lines, value on odd lines
+			ins.lines = append(ins.lines, lines[i])   // "0"
+			ins.lines = append(ins.lines, lines[i+1]) // "INSERT"
 
-				j = i + 2
-				for j < end {
-					code := strings.TrimSpace(lines[j])
-					if code == "0" {
-						nextVal := ""
-						if j+1 < len(lines) {
-							nextVal = strings.TrimSpace(lines[j+1])
+			// Parse code/value pairs within the INSERT entity
+			j := i + 2
+			inAttrib := false
+			attribTag := ""
+			attribVal := ""
+			attribValLineIdx := -1
+
+			for j < end-1 {
+				code := strings.TrimSpace(lines[j])
+				val := lines[j+1] // keep original (may have spaces)
+				valTrim := strings.TrimSpace(val)
+
+				if code == "0" {
+					// End of current entity (ATTRIB or INSERT)
+					if inAttrib {
+						// Save last ATTRIB
+						if attribTag != "" {
+							ins.attribs[attribTag] = attribVal
+							_ = attribValLineIdx
 						}
-						if nextVal == "ATTRIB" {
-							// Collect ATTRIB entity
-							ins.lines = append(ins.lines, lines[j])   // "0"
-							ins.lines = append(ins.lines, lines[j+1]) // "ATTRIB"
-							// Parse ATTRIB to get tag (code 2) and value (code 1)
-							attrTag := ""
-							attrVal := ""
-							k := j + 2
-							for k < end {
-								acode := strings.TrimSpace(lines[k])
-								if acode == "0" {
-									// End of ATTRIB
-									if attrTag != "" {
-										ins.attribs[attrTag] = attrVal
-									}
-									// Check if next is another ATTRIB or end of INSERT
-									if k+1 < len(lines) && strings.TrimSpace(lines[k+1]) == "ATTRIB" {
-										attrTag = ""
-										attrVal = ""
-										ins.lines = append(ins.lines, lines[k], lines[k+1])
-										k += 2
-										continue
-									} else {
-										// End of INSERT entity
-										j = k
-										break
-									}
-								} else if acode == "2" {
-									if k+1 < len(lines) {
-										attrTag = strings.TrimSpace(lines[k+1])
-									}
-									ins.lines = append(ins.lines, lines[k], lines[k+1])
-									k += 2
-								} else if acode == "1" {
-									if k+1 < len(lines) {
-										attrVal = strings.TrimSpace(lines[k+1])
-									}
-									ins.lines = append(ins.lines, lines[k], lines[k+1])
-									k += 2
-								} else {
-									ins.lines = append(ins.lines, lines[k])
-									k++
-								}
-							}
-							// Handle remaining ATTRIB
-							if attrTag != "" && j != k {
-								// Already handled above
-							}
-							j = k
+						if valTrim == "ATTRIB" {
+							// Start new ATTRIB
+							inAttrib = true
+							attribTag = ""
+							attribVal = ""
+							ins.lines = append(ins.lines, lines[j], lines[j+1])
+							j += 2
 							continue
 						} else {
-							// End of INSERT entity (next entity starts)
+							// End of INSERT
+							inAttrib = false
 							break
 						}
+					} else {
+						// Not in ATTRIB — end of INSERT
+						break
 					}
-					// Parse block name (code 2)
-					if code == "2" && ins.blockName == "" && j+1 < len(lines) {
-						ins.blockName = strings.TrimSpace(lines[j+1])
-					}
-					ins.lines = append(ins.lines, lines[j])
-					j++
 				}
-				ins.lines = append(ins.lines, lines[j:j]...) // nothing extra
-				inserts = append(inserts, ins)
-				i = j - 1 // will be incremented by loop
+
+				// Add lines to entity
+				ins.lines = append(ins.lines, lines[j], lines[j+1])
+
+				if inAttrib {
+					if code == "2" {
+						attribTag = valTrim
+					} else if code == "1" {
+						attribVal = valTrim
+						attribValLineIdx = len(ins.lines) - 1 // index of value line
+					}
+				} else {
+					// In INSERT entity itself
+					if code == "2" && ins.blockName == "" {
+						ins.blockName = valTrim
+					}
+				}
+
+				j += 2
 			}
+
+			inserts = append(inserts, ins)
+			i = j
+		} else {
+			i++
 		}
 	}
 	return inserts

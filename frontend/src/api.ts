@@ -342,11 +342,19 @@ export const api = {
   // Template groups (fix 90 templates workflow)
   getTemplateGroups: (output?: string) =>
     apiFetch<{ groups: TemplateGroup[]; count: number }>(`/api/v1/template/groups${output ? `?output=${encodeURIComponent(output)}` : ''}`),
-  applyTemplate: (req: { template_path: string; group_name: string; output_folder?: string }) =>
-    apiFetch<{ ok: boolean; message: string; group: string; mod_folders: number; total_files: number; template_path: string }>('/api/v1/template/apply', {
+  applyTemplate: (req: { template_path: string; group_name: string; output_folder?: string; dry_run?: boolean }) =>
+    apiFetch<{ ok: boolean; message: string; group: string; files_updated: number; errors: number; total_files: number; file_results: Array<{ file: string; success: boolean; error?: string; template_inserts: number; module_inserts: number; matched: number; added_from_template: number; removed_from_module: number }>; dry_run: boolean }>('/api/v1/template/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+    }),
+
+  // Preview template apply (read-only — shows what would change)
+  previewTemplate: (templatePath: string, modulePath: string) =>
+    apiFetch<{ ok: boolean; result: { template_inserts: number; module_inserts: number; matched: number; added_from_template: number; removed_from_module: number; position_changed: number; layer_changed: number; attribute_changed: number; details: Array<{ type: string; block_name: string; description: string; template_pos?: string; module_pos?: string }>; summary: string; can_apply: boolean; warning?: string } }>('/api/v1/template/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_path: templatePath, module_path: modulePath }),
     }),
 
   // Log content (read .log file)

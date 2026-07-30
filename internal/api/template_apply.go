@@ -491,3 +491,56 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		"mod_path":      modFolderPath,
 	})
 }
+
+// PreviewTemplateRequest is the body for POST /api/v1/template/preview
+type PreviewTemplateRequest struct {
+	TemplatePath string `json:"template_path"` // path to the fixed template DXF
+	ModulePath   string `json:"module_path"`   // path to a module DXF to compare against
+}
+
+// handlePreviewTemplate compares a template to a module and returns what would change.
+// This is a read-only preview — no files are modified.
+// It categorizes changes as structural (blocks added/removed), positional (blocks moved),
+// layer changes, and attribute changes (expected design member variable differences).
+func (s *Server) handlePreviewTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req PreviewTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if req.TemplatePath == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_path is required")
+		return
+	}
+	if req.ModulePath == "" {
+		ErrorResponse(w, http.StatusBadRequest, "module_path is required")
+		return
+	}
+
+	// Verify both files exist
+	if _, err := os.Stat(req.TemplatePath); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusBadRequest, "template file does not exist: "+req.TemplatePath)
+		return
+	}
+	if _, err := os.Stat(req.ModulePath); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusBadRequest, "module file does not exist: "+req.ModulePath)
+		return
+	}
+
+	result, err := dxf.PreviewTemplate(req.TemplatePath, req.ModulePath)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "preview failed: "+err.Error())
+		return
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"result": result,
+	})
+}

@@ -116,6 +116,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/project/import", s.handleProjectImport)
 	s.mux.HandleFunc("GET /api/v1/project/export", s.handleProjectExport)
 	s.mux.HandleFunc("POST /api/v1/template/apply", s.handleApplyTemplate)
+	s.mux.HandleFunc("POST /api/v1/template/preview", s.handlePreviewTemplate)
 	s.mux.HandleFunc("GET /api/v1/template/groups", s.handleTemplateGroups)
 	s.mux.HandleFunc("GET /api/v1/log", s.handleLogContent)
 	s.mux.HandleFunc("GET /api/v1/dxf/content", s.handleDXFContent)

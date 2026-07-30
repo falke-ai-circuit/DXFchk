@@ -251,8 +251,47 @@ export default function Browse() {
     }
   };
 
-  const handleApplyTemplate = async (groupName: string, fixedFilePath: string) => {
+  const [previewResult, setPreviewResult] = useState<any>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+
+  const handleApplyTemplate = async (_groupName: string, fixedFilePath: string) => {
+    // Step 1: Preview first (read-only)
+    setPreviewLoading(true);
+    setPreviewResult(null);
+    setShowApplyConfirm(false);
+    try {
+      // Find first module file in the group to preview against
+      const parts = fixedFilePath.split('\\');
+      const modFolder = parts.find(p => p.includes('_mod'));
+      let modulePath = '';
+      if (modFolder) {
+        // Find the first DXF in the same folder that isn't the template itself
+        const dir = fixedFilePath.substring(0, fixedFilePath.lastIndexOf('\\'));
+        const browseResp = await api.browseFolder(dir);
+        const firstMod = browseResp.children?.find(c => 
+          !c.is_dir && c.name.toLowerCase().endsWith('.dxf') && c.name !== parts[parts.length - 1]
+        );
+        if (firstMod) modulePath = firstMod.path;
+      }
+      
+      if (modulePath) {
+        const preview = await api.previewTemplate(fixedFilePath, modulePath);
+        setPreviewResult(preview.result);
+        setShowApplyConfirm(true);
+      } else {
+        // No module to preview against — just apply directly
+        setShowApplyConfirm(true);
+      }
+    } catch (err) {
+      setApplyMsg(`✗ Preview failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+    setPreviewLoading(false);
+  };
+
+  const handleConfirmApply = async (groupName: string, fixedFilePath: string) => {
     setApplyMsg(`Applying fixed template to group ${groupName}...`);
+    setShowApplyConfirm(false);
     try {
       const resp = await api.applyTemplate({
         template_path: fixedFilePath,
@@ -406,12 +445,12 @@ export default function Browse() {
                   const parts = selectedFile.split('\\');
                   const modFolder = parts.find(p => p.includes('_mod'));
                   if (modFolder) {
-                    const groupName = modFolder.split('_mod')[0];
+                    const groupName = modFolder;
                     handleApplyTemplate(groupName, selectedFile);
                   }
                 }}>
                   <Wrench size={12} />
-                  Apply as Fixed Template to Group
+                  Preview Apply to Group
                 </button>
               )}
             </div>
@@ -459,6 +498,75 @@ export default function Browse() {
             {applyMsg && !logContent && (
               <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--accent)' }}>
                 {applyMsg}
+              </div>
+            )}
+
+            {previewLoading && !logContent && (
+              <div style={{ padding: '8px 16px', background: 'rgba(0,138,0,0.05)', borderBottom: '1px solid var(--border)', fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Loader2 size={12} className="spin" />
+                Analyzing template vs module...
+              </div>
+            )}
+
+            {showApplyConfirm && previewResult && !logContent && (
+              <div style={{ padding: '12px 16px', background: 'rgba(0,138,0,0.08)', borderBottom: '1px solid var(--border)', fontSize: '12px' }}>
+                <div style={{ fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>
+                  Preview: What will change when applying this template
+                </div>
+                <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Template: <strong style={{ color: 'var(--text-primary)' }}>{previewResult.template_inserts}</strong> blocks</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Module: <strong style={{ color: 'var(--text-primary)' }}>{previewResult.module_inserts}</strong> blocks</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Matched: <strong style={{ color: 'var(--success)' }}>{previewResult.matched}</strong></span>
+                </div>
+                <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+                  {previewResult.added_from_template > 0 && (
+                    <span style={{ color: 'var(--error)' }}>+{previewResult.added_from_template} blocks added</span>
+                  )}
+                  {previewResult.removed_from_module > 0 && (
+                    <span style={{ color: 'var(--warning)' }}>-{previewResult.removed_from_module} blocks removed</span>
+                  )}
+                  {previewResult.position_changed > 0 && (
+                    <span style={{ color: 'var(--text-secondary)' }}>↔ {previewResult.position_changed} blocks moved</span>
+                  )}
+                  {previewResult.layer_changed > 0 && (
+                    <span style={{ color: 'var(--text-secondary)' }}>▤ {previewResult.layer_changed} layer changes</span>
+                  )}
+                  {previewResult.attribute_changed > 0 && (
+                    <span style={{ color: 'var(--accent)' }}>{previewResult.attribute_changed} attr changes (preserved)</span>
+                  )}
+                </div>
+                <div style={{ color: 'var(--text-muted)', marginBottom: '8px' }}>{previewResult.summary}</div>
+                {previewResult.warning && (
+                  <div style={{ padding: '6px 10px', background: 'rgba(255,165,0,0.1)', borderRadius: '4px', marginBottom: '8px', color: 'var(--warning)', fontSize: '11px' }}>
+                    ⚠ {previewResult.warning}
+                  </div>
+                )}
+                {/* Show first few structural changes */}
+                {previewResult.details && previewResult.details.filter((d: any) => d.type === 'added' || d.type === 'removed').length > 0 && (
+                  <div style={{ marginBottom: '8px', maxHeight: '120px', overflowY: 'auto' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: 'var(--text-muted)' }}>Structural changes:</div>
+                    {previewResult.details.filter((d: any) => d.type === 'added' || d.type === 'removed').slice(0, 10).map((d: any, i: number) => (
+                      <div key={i} style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: d.type === 'added' ? 'var(--error)' : 'var(--warning)' }}>
+                        {d.type === 'added' ? '+' : '-'} {d.block_name}
+                      </div>
+                    ))}
+                    {previewResult.details.filter((d: any) => d.type === 'added' || d.type === 'removed').length > 10 && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>... and {previewResult.details.filter((d: any) => d.type === 'added' || d.type === 'removed').length - 10} more</div>
+                    )}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-primary" style={{ padding: '6px 16px', fontSize: 12 }} onClick={() => {
+                    const parts = selectedFile!.split('\\');
+                    const modFolder = parts.find(p => p.includes('_mod'));
+                    if (modFolder) handleConfirmApply(modFolder, selectedFile!);
+                  }}>
+                    ✓ Confirm & Apply to All Files
+                  </button>
+                  <button className="btn btn-ghost" style={{ padding: '6px 16px', fontSize: 12 }} onClick={() => setShowApplyConfirm(false)}>
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
 
