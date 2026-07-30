@@ -277,7 +277,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
-  getCompareStatus: () => apiFetch<CompareStatus>('/api/v1/compare/status'),
+  getCompareStatus: (projectId?: string) =>
+    apiFetch<CompareStatus>(`/api/v1/compare/status${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),
+  getCompareJobs: () => apiFetch<{ jobs: any[]; count: number; running: number }>('/api/v1/compare/jobs'),
   getResults: () => apiFetch<ResultsResponse>('/api/v1/results'),
 
   // Browse

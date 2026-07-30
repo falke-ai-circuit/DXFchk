@@ -88,7 +88,6 @@ function polylineToPath(entity: DiffEntity): string {
     const edgeLens = pts.slice(0, lastIdx).map((p, i) =>
       Math.sqrt(Math.pow(pts[i+1][0]-p[0], 2) + Math.pow(pts[i+1][1]-p[1], 2))
     );
-    const maxEdgeLen = Math.max(...edgeLens);
     const minEdgeLen = Math.min(...edgeLens);
     // Only draw closing line if it's not longer than 1.5x the shortest edge
     // This prevents diagonal artifacts from 3-point "closed" border frame polylines

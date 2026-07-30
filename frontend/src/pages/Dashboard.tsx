@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import {
   FolderOpen, Plus, Trash2, Folder, FileSearch, Files,
   FileCheck, FileDiff, FileQuestion, Activity, Loader2, FolderCog,
-  Download, Upload, Save, Package, ArrowRight
+  Download, Upload, Save, Package, ArrowRight, ChevronDown
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type Project } from '../api';
@@ -31,7 +31,7 @@ export default function Dashboard() {
   const {
     health, fetchHealth,
     projects, fetchProjects,
-    activeProject, selectProject,
+    selectProject,
     createProject, deleteProject,
     compareStatus, fetchCompareStatus,
     results, fetchResults,
@@ -197,6 +197,7 @@ export default function Dashboard() {
       {editingProject && (
         <div className="card" style={{ marginBottom: '16px', borderLeft: '3px solid var(--accent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <ChevronDown size={18} color="var(--accent)" style={{ transition: 'transform 0.2s', transform: 'rotate(0deg)' }} />
             <FolderCog size={18} color="var(--accent)" />
             <span style={{ fontSize: '16px', fontWeight: 600 }}>
               {editingProject.id.toUpperCase()} — {editingProject.name}
@@ -312,27 +313,36 @@ export default function Dashboard() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {projects.map(p => (
+          {projects.map(p => {
+            const isExpanded = editingProject?.id === p.id;
+            return (
             <div
               key={p.id}
               className="card"
               onClick={() => handleSelect(p.id)}
               style={{
                 cursor: 'pointer',
-                borderLeft: activeProject?.id === p.id ? '3px solid var(--accent)' : '3px solid transparent',
+                borderLeft: isExpanded ? '3px solid var(--accent)' : '3px solid transparent',
+                background: isExpanded ? 'rgba(0,138,0,0.06)' : undefined,
                 display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
+                transition: 'background 0.15s',
               }}
             >
-              <Folder size={20} color={activeProject?.id === p.id ? 'var(--accent)' : 'var(--text-muted)'} />
+              <ChevronDown
+                size={16}
+                color={isExpanded ? 'var(--accent)' : 'var(--text-muted)'}
+                style={{ transition: 'transform 0.2s', transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', flexShrink: 0 }}
+              />
+              <Folder size={20} color={isExpanded ? 'var(--accent)' : 'var(--text-muted)'} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: 14, fontWeight: 600 }}>
                     {p.id.toUpperCase()} — {p.name}
                   </span>
-                  {activeProject?.id === p.id && <span className="badge badge-success" style={{ fontSize: 9, padding: '1px 6px' }}>Active</span>}
+                  {isExpanded && <span className="badge badge-success" style={{ fontSize: 9, padding: '1px 6px' }}>Active</span>}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.template_folder.split('\\').pop()} <ArrowRight size={10} style={{ display: 'inline', verticalAlign: 'middle' }} /> {p.search_folder.split('\\').pop()}
+                  {p.template_folder.split('\\\\').pop()} <ArrowRight size={10} style={{ display: 'inline', verticalAlign: 'middle' }} /> {p.search_folder.split('\\\\').pop()}
                 </div>
               </div>
               <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(p.last_used).toLocaleDateString()}</span>
@@ -340,7 +350,8 @@ export default function Dashboard() {
               <button className="btn btn-ghost" style={{ padding: '4px 8px', fontSize: 11, flexShrink: 0 }} onClick={(e) => handleZipExport(p.id, e)} title="Export ZIP"><Package size={12} /></button>
               <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: 11, flexShrink: 0 }} onClick={(e) => handleDelete(p.id, e)}><Trash2 size={12} /></button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

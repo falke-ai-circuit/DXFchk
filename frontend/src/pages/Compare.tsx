@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderOpen, Play, Square, Loader2,
   Activity, FileCheck, FileDiff, FileQuestion,
   ScanLine, GitCompareArrows, RotateCcw, Clock, Timer, Pause, Search,
+  Layers,
 } from 'lucide-react';
 import { useStore } from '../store';
 import { api, type CompareStatus } from '../api';
@@ -30,11 +31,8 @@ const labelStyle: React.CSSProperties = {
 export default function Compare() {
   const {
     fetchSettings,
-    compareStatus, fetchCompareStatus,
     fetchResults, fetchTemplates,
-    scanTemplates,
     templateCount,
-    logs,
     activeProject,
   } = useStore();
 
@@ -53,15 +51,24 @@ export default function Compare() {
   const [hasSession, setHasSession] = useState(false);
   const [browserTarget, setBrowserTarget] = useState<'template' | 'search' | 'output' | null>(null);
 
+  // Multi-job switcher state (local — not in store)
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [allJobs, setAllJobs] = useState<any[]>([]);
+  const [localStatus, setLocalStatus] = useState<CompareStatus | null>(null);
+  const [localLogs, setLocalLogs] = useState<string[]>([]);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jobsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
+  activeJobIdRef.current = activeJobId;
 
   // Auto-scroll log to bottom
   useEffect(() => {
     if (logEndRef.current) {
       logEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs]);
+  }, [localLogs]);
 
   // Load from active project or settings
   useEffect(() => {
@@ -85,29 +92,70 @@ export default function Compare() {
         }
       });
     }
-    fetchCompareStatus();
     fetchTemplates();
     api.getSession().then(resp => {
       if (resp.session && resp.session.status !== 'completed') {
         setHasSession(true);
       }
     }).catch(() => {});
-  }, [activeProject, fetchSettings, fetchCompareStatus, fetchTemplates]);
+  }, [activeProject, fetchSettings, fetchTemplates]);
+
+  // Fetch all jobs on mount + every 3s
+  const fetchJobs = useCallback(async () => {
+    try {
+      const resp = await api.getCompareJobs();
+      setAllJobs(resp.jobs || []);
+      // Auto-select: if activeProject changed and has a job, switch to it
+      if (activeProject) {
+        const projJob = (resp.jobs || []).find((j: any) => j.project_id === activeProject.id || j.project_name === activeProject.name);
+        if (projJob) {
+          setActiveJobId(prev => prev !== projJob.id ? projJob.id : prev);
+          return;
+        }
+      }
+      // If no activeJobId yet, pick first running job, or first job
+      if (!activeJobIdRef.current && (resp.jobs || []).length > 0) {
+        const running = (resp.jobs || []).find((j: any) => j.running);
+        setActiveJobId(running ? running.id : resp.jobs[0].id);
+      }
+    } catch { /* ignore */ }
+  }, [activeProject]);
 
   useEffect(() => {
-    if (compareStatus?.running && !intervalRef.current) {
+    fetchJobs();
+    jobsIntervalRef.current = setInterval(fetchJobs, 3000);
+    return () => { if (jobsIntervalRef.current) clearInterval(jobsIntervalRef.current); };
+  }, [fetchJobs]);
+
+  // Fetch status for the active job
+  const fetchJobStatus = useCallback(async () => {
+    const jobId = activeJobIdRef.current;
+    try {
+      const s = await api.getCompareStatus(jobId || undefined);
+      setLocalStatus(s);
+      setLocalLogs(s.recent_logs || []);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchJobStatus();
+  }, [activeJobId, fetchJobStatus]);
+
+  // Poll status every 1s when running
+  useEffect(() => {
+    if (localStatus?.running && !intervalRef.current) {
       intervalRef.current = setInterval(() => {
-        fetchCompareStatus();
+        fetchJobStatus();
         fetchResults();
       }, 1000);
-    } else if (!compareStatus?.running && intervalRef.current) {
+    } else if (!localStatus?.running && intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
       setComparing(false);
       setStopping(false);
       fetchResults();
     }
-  }, [compareStatus?.running, fetchCompareStatus, fetchResults]);
+  }, [localStatus?.running, fetchJobStatus, fetchResults]);
 
   useEffect(() => {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
@@ -136,7 +184,7 @@ export default function Compare() {
       setHasSession(true);
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(() => {
-        fetchCompareStatus();
+        fetchJobStatus();
         fetchResults();
       }, 1000);
     } catch (err) {
@@ -165,7 +213,7 @@ export default function Compare() {
       setComparing(true);
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(() => {
-        fetchCompareStatus();
+        fetchJobStatus();
         fetchResults();
       }, 1000);
     } catch (err) {
@@ -183,16 +231,16 @@ export default function Compare() {
     try {
       await api.clearSession();
     } catch { /* ignore */ }
-    fetchCompareStatus();
+    fetchJobStatus();
     fetchResults();
   };
 
   const results = useStore.getState().results;
-  const matched = compareStatus?.matched ?? results.filter(r => r.status === 'match').length;
-  const different = compareStatus?.different ?? results.filter(r => r.status === 'different').length;
-  const noTemplate = compareStatus?.no_template ?? results.filter(r => r.status === 'no_template').length;
+  const cs: CompareStatus | null = localStatus;
+  const matched = cs?.matched ?? results.filter(r => r.status === 'match').length;
+  const different = cs?.different ?? results.filter(r => r.status === 'different').length;
+  const noTemplate = cs?.no_template ?? results.filter(r => r.status === 'no_template').length;
 
-  const cs: CompareStatus | null = compareStatus;
   const progress = cs?.progress ?? 0;
   const elapsedTime = cs?.elapsed_time || '00:00:00';
   const eta = cs?.eta || '--:--:--';
@@ -208,6 +256,46 @@ export default function Compare() {
           <div style={{ marginBottom: '12px', padding: '6px 10px', background: 'rgba(0,138,0,0.08)', borderRadius: 6, fontSize: 12, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FolderOpen size={14} />
             Project: <strong>{activeProject.name}</strong>
+          </div>
+        )}
+
+        {/* Multi-job switcher */}
+        {allJobs.length > 0 && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Layers size={12} /> Comparison Jobs {allJobs.length > 1 && `(${allJobs.length})`}
+            </div>
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              {allJobs.map((job: any) => {
+                const isActive = job.id === activeJobId;
+                return (
+                  <button
+                    key={job.id}
+                    onClick={() => setActiveJobId(job.id)}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      borderRadius: 6,
+                      border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border-light)'}`,
+                      background: isActive ? 'rgba(0,138,0,0.12)' : 'var(--bg-elevated)',
+                      color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontWeight: isActive ? 600 : 400,
+                      fontFamily: 'var(--font-mono)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {job.running && <Loader2 size={10} className="spin" />}
+                    {job.project_name || job.id.slice(0, 8)}
+                    {job.progress !== undefined && (
+                      <span style={{ fontSize: 9, opacity: 0.7 }}>{job.progress.toFixed(0)}%</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -332,17 +420,22 @@ export default function Compare() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', flexShrink: 0 }}>
           <Activity size={16} color="var(--accent)" />
           <h2 style={{ fontSize: '14px', fontWeight: 600 }}>Live Log</h2>
+          {activeJobId && allJobs.find(j => j.id === activeJobId) && (
+            <span style={{ fontSize: 11, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+              · {allJobs.find(j => j.id === activeJobId)?.project_name || activeJobId.slice(0, 8)}
+            </span>
+          )}
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>
-            {logs.length} entries
+            {localLogs.length} entries
           </span>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-          {logs.length === 0 ? (
+          {localLogs.length === 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
               No logs yet. Start a comparison to see real-time output.
             </div>
           ) : (
-            logs.map((line, i) => (
+            localLogs.map((line, i) => (
               <div key={i} style={{ marginBottom: '2px' }}>
                 <span style={{ color: 'var(--text-muted)' }}>{String(i + 1).padStart(4, ' ')}</span>{' '}
                 {line}
