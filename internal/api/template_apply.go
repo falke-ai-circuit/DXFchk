@@ -545,3 +545,77 @@ func (s *Server) handlePreviewTemplate(w http.ResponseWriter, r *http.Request) {
 		"result": result,
 	})
 }
+
+// CreateGroupTemplateRequest is the body for POST /api/v1/template/create-group
+type CreateGroupTemplateRequest struct {
+	GroupPath      string `json:"group_path"`      // Path to the group folder containing multiple DXF modules
+	TemplateFolder string `json:"template_folder"`  // Where to save the new template (optional, defaults to project template folder)
+	TemplateName   string `json:"template_name"`    // New template name (e.g. "MF001Hp1") — becomes the $(TEMPLATE) attr value
+}
+
+// handleCreateTemplateFromGroup creates a template by analyzing ALL modules in a group.
+// This uses cross-module placeholder inference: values that differ across modules
+// are replaced with their ATTRIB tag name as a placeholder.
+func (s *Server) handleCreateTemplateFromGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ErrorResponse(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req CreateGroupTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if req.GroupPath == "" {
+		ErrorResponse(w, http.StatusBadRequest, "group_path is required")
+		return
+	}
+	if req.TemplateName == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_name is required")
+		return
+	}
+
+	// Verify group folder exists
+	if _, err := os.Stat(req.GroupPath); os.IsNotExist(err) {
+		ErrorResponse(w, http.StatusBadRequest, "group folder does not exist: "+req.GroupPath)
+		return
+	}
+
+	// Determine template folder
+	templateFolder := req.TemplateFolder
+	if templateFolder == "" {
+		templateFolder = s.settings.TemplateFolder
+		if templateFolder == "" && s.settings.ActiveProjectID != "" {
+			store := loadProjects()
+			if proj, exists := store.Projects[s.settings.ActiveProjectID]; exists {
+				templateFolder = proj.TemplateFolder
+			}
+		}
+	}
+	if templateFolder == "" {
+		ErrorResponse(w, http.StatusBadRequest, "template_folder is required (set template_folder or activate a project)")
+		return
+	}
+
+	// Create the template using cross-module placeholder inference
+	templatePath := filepath.Join(templateFolder, req.TemplateName+".dxf")
+	result, err := dxf.CreateTemplateFromGroup(req.GroupPath, templatePath, req.TemplateName)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "failed to create template from group: "+err.Error())
+		return
+	}
+
+	JSONResponse(w, http.StatusOK, map[string]any{
+		"ok":              true,
+		"message":         fmt.Sprintf("Template '%s' created from %d modules in group, %d placeholders inferred", req.TemplateName, result.ModulesAnalyzed, result.PlaceholdersInferred),
+		"template_name":   req.TemplateName,
+		"template_path":   templatePath,
+		"modules_analyzed": result.ModulesAnalyzed,
+		"placeholders":    result.PlaceholdersInferred,
+		"line_count_mismatch": result.LineCountMismatch,
+		"used_fallback":   result.UsedFallback,
+		"fallback_reason": result.FallbackReason,
+	})
+}
