@@ -135,8 +135,23 @@ def main():
         print("FAILED to get DXFchk settings — is DXFchk running?")
         return
     
-    output_folder = settings["output_folder"]
-    template_folder = settings["template_folder"]
+    output_folder = settings.get("output_folder", "")
+    template_folder = settings.get("template_folder", "")
+    
+    # If folders are empty, load from active project
+    if not output_folder or not template_folder:
+        active_id = settings.get("active_project_id", "")
+        if active_id:
+            r2 = subprocess.run(f"curl -s --max-time 30 {DXFCHK_URL}/api/v1/projects", shell=True, capture_output=True, text=True, timeout=35)
+            projects = json.loads(r2.stdout)
+            for proj in projects.get("projects", []):
+                if proj.get("id") == active_id:
+                    if not output_folder:
+                        output_folder = proj.get("output_folder", "")
+                    if not template_folder:
+                        template_folder = proj.get("template_folder", "")
+                    break
+    
     print(f"Output: {output_folder}")
     print(f"Templates: {template_folder}\n")
     

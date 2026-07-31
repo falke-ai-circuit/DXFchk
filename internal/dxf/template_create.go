@@ -3,7 +3,6 @@ package dxf
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -11,19 +10,22 @@ import (
 // a template by applying the reverse-engineered DNA Explorer rules, and saves the
 // result to outputPath.
 //
-// Reverse-engineered normalization rules (from 23 groups, 25,860 line diffs):
+// Reverse-engineered normalization rules (from 23 groups, 25,860 line diffs,
+// validated with position-aware entity-type analysis across 5 groups):
 //
 //  1. $(TEMPLATE) attribute value → new template name (code 1 near code 2 = $(TEMPLATE))
 //  2. Module ID → template name in all code-1 attribute values
 //     Module ID derived from filename: XXX_pYYYY_pZZZZ → XXX.YYYY.ZZZZ
-//  3. Layer normalization (code 8): N_COM_HIDDEN, N_COM_EVAL_FALSE, N_COM_COM_HIDDEN,
-//     N_COM_COM_EVAL_FALSE → "0" (template uses layer "0" for all hidden entities)
-//  4. DEVICETAG normalization: detect pr:XXXXXXXXXXX patterns → pr:DEVICETAGn
-//  5. Fixed placeholder restoration: PROJECT, TEMPLATE, DISPLAY, INSCODE, MC → kept as-is
-//     (these are template-level values, not module-specific)
+//  3. Entity-aware layer normalization (code 8):
+//     - ATTRIB entities: Module "N_COM_HIDDEN" → Template "0"
+//       (DNA Explorer sets ATTRIB layers from "0" to "N_COM_HIDDEN" when creating modules)
+//     - SEQEND entities: Module "N_COM_EVAL_FALSE" → Template "N_COM_HIDDEN"
+//       (DNA Explorer shifts SEQEND layers one step forward)
+//     - INSERT entities: Module "N_COM_HIDDEN" → Template "1" (rare, 5 occurrences)
+//     - N_COM_COM_HIDDEN on ATTRIB: stays as-is (template also has it)
+//     - N_COM_COM_EVAL_FALSE on SEQEND: → N_COM_COM_HIDDEN
 //
-// This performs raw text-level replacement (not parse + re-serialize) to preserve
-// the exact DXF file structure byte-for-byte.
+// This performs raw text-level replacement to preserve the exact DXF file structure.
 //
 // Returns the old template name (from $(TEMPLATE) attribute) that was replaced.
 func CreateTemplateFromFile(srcPath, outputPath, newTemplateName string) (oldTemplate string, err error) {
@@ -42,19 +44,9 @@ func CreateTemplateFromFile(srcPath, outputPath, newTemplateName string) (oldTem
 	// Extract module ID from source filename (e.g., 602_p5000_p0006.dxf → 602.5000.0006)
 	moduleID := extractModuleID(srcPath)
 
-	// Track changes for reporting
-	changes := struct {
-		templateAttr int
-		moduleID     int
-		layers       int
-		deviceTags   int
-	}{}
-
 	// === PASS 1: Find old template name and normalize $(TEMPLATE) attribute ===
-	// Also collect module_id occurrences to know what to replace
 	for i := 0; i < len(lines)-1; i++ {
 		if strings.TrimSpace(lines[i]) == "2" && strings.TrimSpace(lines[i+1]) == "$(TEMPLATE)" {
-			// Walk backwards to find code 1 (text value)
 			for j := i - 1; j >= 0; j-- {
 				if strings.TrimSpace(lines[j]) == "1" {
 					if j+1 < len(lines) {
@@ -62,7 +54,6 @@ func CreateTemplateFromFile(srcPath, outputPath, newTemplateName string) (oldTem
 							oldTemplate = strings.TrimSpace(lines[j+1])
 						}
 						lines[j+1] = newTemplateName
-						changes.templateAttr++
 					}
 					break
 				}
@@ -73,107 +64,44 @@ func CreateTemplateFromFile(srcPath, outputPath, newTemplateName string) (oldTem
 		}
 	}
 
-	if changes.templateAttr == 0 {
+	if oldTemplate == "" {
 		return "", fmt.Errorf("could not find $(TEMPLATE) attribute in DXF file")
 	}
 
 	// === PASS 2: Replace module ID with template name in code-1 values ===
-	// Module ID appears in attribute values as: "602.5000.0006.PL", "pr:602.5000.0006:av", etc.
-	// We need to replace all occurrences of moduleID with newTemplateName
 	if moduleID != "" {
 		for i := 0; i < len(lines); i++ {
-			// Only modify value lines (code 1 values), not code lines
-			// Check if this is a value line (previous line is code "1")
 			if i > 0 && strings.TrimSpace(lines[i-1]) == "1" {
 				if strings.Contains(lines[i], moduleID) {
 					lines[i] = strings.ReplaceAll(lines[i], moduleID, newTemplateName)
-					changes.moduleID++
 				}
 			}
 		}
+	// Note: We do NOT replace the dotless variant (e.g., "60250000006").
+	// The original templates keep device tag numbers as-is (e.g., "63160610134").
+	// Replacing dotless variants would incorrectly replace device tags with the template name.
 	}
 
-	// Also replace moduleID without dots (as seen in data: "60250000006" appears in some values)
-	if moduleID != "" {
-		moduleIDNoDots := strings.ReplaceAll(moduleID, ".", "")
-		if moduleIDNoDots != moduleID {
-			for i := 0; i < len(lines); i++ {
-				if i > 0 && strings.TrimSpace(lines[i-1]) == "1" {
-					if strings.Contains(lines[i], moduleIDNoDots) {
-						lines[i] = strings.ReplaceAll(lines[i], moduleIDNoDots, newTemplateName)
-						changes.moduleID++
-					}
-				}
-			}
-		}
-	}
-
-	// === PASS 3: Normalize layers (code 8) ===
-	// Template has layer "0", module has layers like "1_COM_HIDDEN", "2_COM_EVAL_FALSE", etc.
-	// Reverse: Replace all *_COM_HIDDEN, *_COM_EVAL_FALSE layers back to "0"
-	// Also handle "N_COM_COM_HIDDEN" and "N_COM_COM_EVAL_FALSE"
+	// === PASS 3: Entity-aware layer normalization (code 8) ===
+	// Walk through lines tracking the current entity type (from code 0).
+	// When we find a code-8 value, normalize based on entity type:
+	//   ATTRIB: N_COM_HIDDEN → 0, N_COM_COM_EVAL_FALSE → N_COM_COM_HIDDEN
+	//   SEQEND: N_COM_EVAL_FALSE → N_COM_HIDDEN, N_COM_COM_EVAL_FALSE → N_COM_COM_HIDDEN
+	//   INSERT: N_COM_HIDDEN → 1 (rare)
+	currentEntity := ""
 	for i := 0; i < len(lines); i++ {
+		// Track entity type: code 0 followed by entity name
+		if strings.TrimSpace(lines[i]) == "0" && i+1 < len(lines) {
+			currentEntity = strings.TrimSpace(lines[i+1])
+			continue
+		}
+
+		// Check for code 8 (layer)
 		if i > 0 && strings.TrimSpace(lines[i-1]) == "8" {
 			val := strings.TrimSpace(lines[i])
-			if isCOMLayer(val) {
-				lines[i] = "0"
-				changes.layers++
-			}
-		}
-	}
-
-	// Also handle layer "1" → "0" in some cases (from data: 10 times)
-	// And "2" → "2_COM_HIDDEN" (6 times) etc. — these are less common and harder to determine
-	// without the original template. Skip for now.
-
-	// === PASS 4: DEVICETAG normalization ===
-	// Template has "DEVICETAG1", "DEVICETAG2", etc.
-	// Module has actual device tags like "63513200114" or "pr:63513200114"
-	// Pattern: in code-1 values, detect device tag patterns and replace with DEVICETAGn
-	// Device tags are: pr: followed by 10-13 digits, or bare 10-13 digit numbers
-	// BUT: we can't know which DEVICETAGn to use without the original template
-	// Strategy: detect pr:XXXXXXXXXXX patterns and replace with pr:DEVICETAGn
-	// using a counter for each unique device tag
-	deviceTagRegex := regexp.MustCompile(`pr:(\d{10,13})`)
-	bareDeviceTagRegex := regexp.MustCompile(`^(\d{10,13})$`)
-
-	// Build a mapping of unique device tags → DEVICETAGn
-	deviceTagMap := make(map[string]string)
-	tagCounter := 0
-
-	for i := 0; i < len(lines); i++ {
-		if i > 0 && strings.TrimSpace(lines[i-1]) == "1" {
-			val := strings.TrimSpace(lines[i])
-			// Check for pr:XXXXXXXXXXX pattern
-			matches := deviceTagRegex.FindAllStringSubmatch(val, -1)
-			for _, m := range matches {
-				fullMatch := m[0] // pr:XXXXXXXXXXX
-				if _, exists := deviceTagMap[fullMatch]; !exists {
-					tagCounter++
-					deviceTagMap[fullMatch] = fmt.Sprintf("pr:DEVICETAG%d", tagCounter)
-				}
-			}
-			// Also check bare device tag numbers (only if entire value is a number)
-			bareMatch := bareDeviceTagRegex.FindStringSubmatch(val)
-			if bareMatch != nil {
-				if _, exists := deviceTagMap[val]; !exists {
-					tagCounter++
-					deviceTagMap[val] = fmt.Sprintf("DEVICETAG%d", tagCounter)
-				}
-			}
-		}
-	}
-
-	// Apply device tag replacements
-	for i := 0; i < len(lines); i++ {
-		if i > 0 && strings.TrimSpace(lines[i-1]) == "1" {
-			val := lines[i]
-			for original, replacement := range deviceTagMap {
-				if strings.Contains(val, original) {
-					lines[i] = strings.ReplaceAll(val, original, replacement)
-					changes.deviceTags++
-					break
-		}
+			normalized := normalizeLayerByEntity(val, currentEntity)
+			if normalized != val {
+				lines[i] = normalized
 			}
 		}
 	}
@@ -193,12 +121,55 @@ func CreateTemplateFromFile(srcPath, outputPath, newTemplateName string) (oldTem
 	return oldTemplate, nil
 }
 
+// normalizeLayerByEntity normalizes a layer value based on the DXF entity type.
+//
+// From position-aware analysis of 5 groups (3,724 layer diffs):
+//
+//	ATTRIB entities (3,140 diffs):
+//	  Template "0" → Module "N_COM_HIDDEN"  (reverse: N_COM_HIDDEN → "0")
+//	  Template "0" → Module "N_COM_COM_HIDDEN" (rare, stays as-is in template)
+//	SEQEND entities (584 diffs):
+//	  Template "N_COM_HIDDEN" → Module "N_COM_EVAL_FALSE"  (reverse: EVAL_FALSE → HIDDEN)
+//	  Template "N_COM_COM_HIDDEN" → Module "N_COM_COM_EVAL_FALSE"  (reverse: same)
+//	  Template "1" → Module "N" (color number changes, rare)
+//	INSERT entities (5 diffs):
+//	  Template "1" → Module "1_COM_HIDDEN"  (reverse: 1_COM_HIDDEN → "1")
+func normalizeLayerByEntity(layer, entityType string) string {
+	switch entityType {
+	case "ATTRIB":
+		// N_COM_HIDDEN → 0 (but NOT N_COM_COM_HIDDEN)
+		if strings.HasSuffix(layer, "_COM_HIDDEN") && !strings.HasSuffix(layer, "_COM_COM_HIDDEN") {
+			return "0"
+		}
+		// N_COM_COM_EVAL_FALSE → N_COM_COM_HIDDEN (one step back)
+		if strings.HasSuffix(layer, "_COM_COM_EVAL_FALSE") {
+			return strings.TrimSuffix(layer, "_COM_COM_EVAL_FALSE") + "_COM_COM_HIDDEN"
+		}
+		// N_COM_COM_HIDDEN stays as-is (template also has it)
+
+	case "SEQEND":
+		// N_COM_EVAL_FALSE → N_COM_HIDDEN (one step back)
+		if strings.HasSuffix(layer, "_COM_COM_EVAL_FALSE") {
+			return strings.TrimSuffix(layer, "_COM_COM_EVAL_FALSE") + "_COM_COM_HIDDEN"
+		}
+		if strings.HasSuffix(layer, "_COM_EVAL_FALSE") {
+			return strings.TrimSuffix(layer, "_COM_EVAL_FALSE") + "_COM_HIDDEN"
+		}
+		// N_COM_HIDDEN stays as-is on SEQEND (template also has it)
+
+	case "INSERT":
+		// INSERT layer changes are rare (5 occurrences in 5 groups) and
+		// position-dependent. Normalizing them introduces more errors than
+		// it fixes. Leave INSERT layers as-is.
+	}
+
+	return layer
+}
+
 // extractModuleID derives the module ID from the DXF filename.
 // Pattern: XXX_pYYYY_pZZZZ.dxf → XXX.YYYY.ZZZZ
-// Also handles: XXX_pYYYY.dxf → XXX.YYYY
-// And: AU_c631_p1811_p0061.dxf → 631.1811.0061 (skip AU_ prefix)
+// Also handles: AU_c631_p1811_p0061.dxf → 631.1811.0061
 func extractModuleID(filepath string) string {
-	// Get base filename without extension
 	base := filepath
 	if idx := strings.LastIndex(base, "\\"); idx >= 0 {
 		base = base[idx+1:]
@@ -208,17 +179,18 @@ func extractModuleID(filepath string) string {
 	}
 	base = strings.TrimSuffix(base, ".dxf")
 
-	// Split by underscore
 	parts := strings.Split(base, "_")
 	var numericParts []string
 	for _, p := range parts {
-		// Skip non-numeric parts (like "AU", "c631")
-		if len(p) >= 4 && p[0] == 'c' {
-			p = p[1:]
+		stripped := p
+		if len(p) > 1 && (p[0] == 'p' || p[0] == 'c') {
+			rest := p[1:]
+			if isNumeric(rest) && len(rest) >= 3 {
+				stripped = rest
+			}
 		}
-		// Check if this part is a number (possibly with leading zeros)
-		if isNumeric(p) {
-			numericParts = append(numericParts, p)
+		if isNumeric(stripped) && len(stripped) >= 3 {
+			numericParts = append(numericParts, stripped)
 		}
 	}
 
@@ -242,17 +214,32 @@ func isNumeric(s string) bool {
 	return true
 }
 
-// isCOMLayer checks if a layer name is a COM (component) hidden/eval layer
-// that should be normalized back to "0" in templates.
-func isCOMLayer(layer string) bool {
-	// Patterns: N_COM_HIDDEN, N_COM_EVAL_FALSE, N_COM_COM_HIDDEN, N_COM_COM_EVAL_FALSE
-	// Where N = 1, 2, 3, 4, etc.
-	if strings.Contains(layer, "_COM_HIDDEN") || strings.Contains(layer, "_COM_EVAL_FALSE") {
-		return true
+// ReadTemplateName reads a DXF file and returns the value of the $(TEMPLATE) attribute.
+func ReadTemplateName(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
 	}
-	// Also: N_COM_COM_HIDDEN, N_COM_COM_EVAL_FALSE
-	if strings.Contains(layer, "_COM_COM_") {
-		return true
+	content := string(data)
+	lines := strings.Split(content, "\r\n")
+	if len(lines) < 2 {
+		lines = strings.Split(content, "\n")
 	}
-	return false
+
+	for i := 0; i < len(lines)-1; i++ {
+		if strings.TrimSpace(lines[i]) == "2" && strings.TrimSpace(lines[i+1]) == "$(TEMPLATE)" {
+			for j := i - 1; j >= 0; j-- {
+				if strings.TrimSpace(lines[j]) == "1" {
+					if j+1 < len(lines) {
+						return strings.TrimSpace(lines[j+1]), nil
+					}
+					break
+				}
+				if strings.TrimSpace(lines[j]) == "0" {
+					break
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("$(TEMPLATE) attribute not found")
 }

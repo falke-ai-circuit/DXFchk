@@ -468,6 +468,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	// Create the template by modifying $(TEMPLATE) attribute
 	// Save to template folder
 	templatePath := filepath.Join(templateFolder, req.TemplateName+".dxf")
+
 	oldTemplate, err := dxf.CreateTemplateFromFile(req.SourceFile, templatePath, req.TemplateName)
 	if err != nil {
 		ErrorResponse(w, http.StatusInternalServerError, "failed to create template: "+err.Error())
