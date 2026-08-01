@@ -3,6 +3,7 @@ package dxf
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -278,7 +279,15 @@ func ApplyTemplateToModule(templatePath, modulePath, outputPath, newTemplateName
 						switch code {
 						case "8", "10", "20", "30", "50", "41", "42", "43", "62":
 							if tmplVal, ok := tGeom.codes[code]; ok {
-								outLines = append(outLines, modLines[j], tmplVal)
+								modVal := modLines[j+1]
+								// Preserve module's original string format when values are
+								// numerically equal (e.g. "1220.0" vs "1220" — same number,
+								// different string). This prevents cosmetic diffs on apply.
+								if numericallyEqual(tmplVal, modVal) {
+									outLines = append(outLines, modLines[j], modVal)
+								} else {
+									outLines = append(outLines, modLines[j], tmplVal)
+								}
 							} else {
 								outLines = append(outLines, modLines[j], modLines[j+1])
 							}
@@ -625,4 +634,18 @@ func replaceTemplateAttr(lines []string, newName string) []string {
 		}
 	}
 	return lines
+}
+
+// numericallyEqual checks if two DXF string values represent the same number.
+// Handles "1220.0" vs "1220", "0.0" vs "0", etc.
+// Non-numeric strings (layer names like "N_COM_HIDDEN") return false.
+func numericallyEqual(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	fa, errA := strconv.ParseFloat(a, 64)
+	fb, errB := strconv.ParseFloat(b, 64)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return fa == fb
 }
